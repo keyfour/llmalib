@@ -17,30 +17,36 @@ Research confirms this mismatch. Work on SLM-first architectures (arxiv:2506.021
 ## Design Principles
 
 ### 1. Narrow tasks over broad prompts
+
 A single unstructured prompt fed to a 7B model is unreliable. The same goal broken into three focused sub-tasks — each with a tight schema and token budget — is not. `llmalib` makes task decomposition the primary abstraction.
 
 > *"Invocations of tools and language models during an agentic process are often accompanied by careful prompting that focuses the language model on delivering the narrow functionality that is required at the time."*
 > — arxiv:2506.02153
 
 ### 2. Structured output as the reliability layer
+
 Hallucination detection after the fact is expensive and unreliable. Preventing hallucination by constraining output format via Pydantic schemas is cheap and deterministic. Every task in `llmalib` declares its output shape; the library enforces it.
 
 > Instruction-based prompts coupled with iterative refinement *"significantly reduces hallucinations by constraining model responses to align with facts and rationality."*
 > — arxiv:2510.06265
 
 ### 3. Transparent execution
+
 Every LLM call — its rendered prompt, raw response, parse result, retry count, and guard outcomes — is recorded in a `Trace`. Nothing is hidden. You can replay any run, diff prompts across retries, and export traces for debugging.
 
 ### 4. Explicit context budgets
+
 Context rot is real. Feeding an ever-growing history into each task call silently degrades quality. `llmalib` enforces a per-task token budget and trims context deterministically rather than letting the model "figure it out".
 
 > Observation masking — explicitly trimming verbose context — is consistently more efficient than LLM-based summarization, often achieving better solve rates at lower cost.
 > — arxiv:2508.21433
 
 ### 5. Functional Python, no class hierarchies
+
 Tasks are data (`@dataclass`). Operations are functions. Pipelines are lists. There is no `BaseAgent` to inherit from, no lifecycle hooks to implement, no dependency injection container to configure.
 
 ### 6. Minimal dependencies
+
 `pydantic`, `httpx`, `jinja2`, `rich` (optional). That is the entire dependency tree.
 
 ---
