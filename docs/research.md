@@ -10,15 +10,12 @@ least one empirical result cited here.
 
 **Source:** *Small Language Models are the Future of Agentic AI* (arxiv:2506.02153)
 
-**Finding:** SLMs are 10–30× cheaper in latency, energy, and FLOPs than 70B+ models.
-Their reliability in agentic workflows improves dramatically when each invocation is
-given a focused, narrow task rather than a broad instruction. Each invocation is also
-a natural source of data for future specialisation via fine-tuning.
+**Finding:** The authors argue that SLMs are 10–30× cheaper in latency, energy, and FLOPs than 70B+ models. They claim that reliability in agentic workflows improves dramatically when each invocation is given a focused, narrow task rather than a broad instruction. Each invocation is also presented as a natural source of data for future specialisation via fine-tuning. It should be noted that this paper is a positional argument from Nvidia researchers and does not provide experimental evidence to support these specific performance claims.
 
 **Design consequence:**
+
 - `Task` is the primary abstraction, not "agent". A task is inherently narrow.
-- `Decomposer` breaks large prompts into multiple focused tasks rather than passing
-  them whole to a single call.
+- `Decomposer` breaks large prompts into multiple focused tasks rather than passing them whole to a single call.
 - The `token_budget` field on `Task` enforces narrowness structurally.
 
 ---
@@ -36,6 +33,7 @@ AutoPDL showed accuracy gains of up to 67.5 percentage points on 3B–70B models
 selecting the right prompting pattern per model.
 
 **Design consequence:**
+
 - `Task.examples` supports inline few-shot examples that are included in the system prompt.
 - `memory/examples.py` supports dynamic example retrieval from a store, enabling
   "bootstrap" behaviour: successful runs populate the store, improving future runs.
@@ -47,12 +45,14 @@ selecting the right prompting pattern per model.
 ## 3. Context Degradation: The Effective Window Is Smaller Than the Technical Limit
 
 **Sources:**
+
 - *Context Rot* (Chroma Research, citing arxiv:2509.21361)
 - *Context Length Alone Hurts LLM Performance Despite Perfect Retrieval* (arxiv:2510.05381)
 - *The Complexity Trap: Simple Observation Masking Is as Efficient as LLM Summarization*
   (arxiv:2508.21433)
 
 **Findings:**
+
 - LLM performance on real tasks (not simple retrieval benchmarks) degrades as context grows,
   even when the model technically has room.
 - The "lost in the middle" effect means models reliably ignore information in the middle of
@@ -62,6 +62,7 @@ selecting the right prompting pattern per model.
 - Even with perfect retrieval, longer contexts hurt reasoning quality.
 
 **Design consequence:**
+
 - `Task.token_budget` is a mandatory parameter with a sensible default (2048 tokens).
 - `context_window.trim_to_budget()` uses truncation (not summarisation) as the default
   strategy. It preserves the system prompt and final user turn, and trims middle history.
@@ -75,12 +76,14 @@ selecting the right prompting pattern per model.
 ## 4. Hallucination: Structure Constrains, Reflection Corrects
 
 **Sources:**
+
 - *Large Language Models Hallucination: A Comprehensive Survey* (arxiv:2510.06265)
 - *Hallucination Detection and Mitigation in Large Language Models* (arxiv:2601.09929)
 - *Theoretical Foundations and Mitigation of Hallucination in LLMs* (arxiv:2507.22915)
 - *Reducing hallucination in structured outputs via RAG* (arxiv:2404.08189)
 
 **Findings:**
+
 - Hallucination is formally proven to be unavoidable in the general case (arxiv:2401.11817).
   The practical implication: build for *mitigation*, not *elimination*.
 - Instruction-based prompts with structured output constraints significantly reduce
@@ -93,6 +96,7 @@ selecting the right prompting pattern per model.
   external tools.
 
 **Design consequence:**
+
 - Every `Task` requires an `output_schema`. There is no unstructured task.
 - `validator.py` uses three-strategy JSON extraction to handle model non-compliance with
   format instructions (a common failure mode for small models).
@@ -113,6 +117,7 @@ reinforcement — is significantly more effective than resampling with the same 
 The model contrasts its new response against the recorded error in its context.
 
 **Design consequence:**
+
 - `retry.build_reflection_message()` constructs a specific error turn, not a generic
   "try again" message.
 - The reflection message lists each error individually and explicitly tells the model
@@ -135,6 +140,7 @@ model; the executor handles narrow steps and can be much simpler. The expensive 
 call is made once; executor calls are cheap and focused.
 
 **Design consequence:**
+
 - `decomposer.py` implements the planner role: one LLM call produces a `DecompositionPlan`.
 - `pipeline.py` implements the executor role: each `Task` is a focused executor call.
 - The two can use different models — `Decomposer` can be configured to call a larger model
@@ -147,6 +153,7 @@ call is made once; executor calls are cheap and focused.
 **Source:** *Promptomatix: An Automatic Prompt Optimization* (arxiv:2507.14241)
 
 **Findings:**
+
 - Models exhibit strong recency bias: the last few-shot example has 2–3× more influence
   than the first.
 - Label consistency across examples is critical — inconsistent formatting reduces few-shot
@@ -154,6 +161,7 @@ call is made once; executor calls are cheap and focused.
 - Edge cases teach boundary recognition but can cause decision paralysis if overrepresented.
 
 **Design consequence:**
+
 - `examples.select_examples()` orders examples by BM25 relevance, placing the most similar
   example last (maximum recency effect).
 - All examples are formatted with the same template. Mixing formats is not supported.
@@ -167,12 +175,13 @@ call is made once; executor calls are cheap and focused.
 **Source:** *Memory Management and Contextual Consistency for Long-Running Agents*
 (arxiv:2509.25250)
 
-**Finding:** Agents that accumulate all prior history exhibit "self-degradation" — 
+**Finding:** Agents that accumulate all prior history exhibit "self-degradation" —
 performance declines over time as flawed or irrelevant memories pollute the context.
 The solution is selective retention with an "intelligent decay" mechanism that keeps
 only high-quality, task-relevant results.
 
 **Design consequence:**
+
 - `store.py` supports a `score` field on each entry, allowing callers to mark low-quality
   results (e.g., from tasks that succeeded on attempt 3) with lower scores.
 - `store.get_relevant()` ranks entries by BM25 similarity × entry score, naturally
