@@ -1,0 +1,20 @@
+[package]
+name = "llmalib-memory"
+version = "0.1.0"
+edition = "2021"
+description = "Memory package for llmalib: KV stores, token budgeting, few-shot examples"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[lib]
+path = "mod.rs"
+
+[dependencies.llmalib-core]
+path = "../core"

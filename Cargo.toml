@@ -1,0 +1,3 @@
+[workspace]
+members = ["src/packages/core", "src/packages/memory"]
+resolver = "2"
