@@ -252,3 +252,7 @@ __pycache__/
 
 # Windows
 Thumbs.db
+
+# Added by cargo
+
+/target
