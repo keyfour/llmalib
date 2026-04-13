@@ -1,0 +1,18 @@
+[package]
+name = "llmalib-reliability"
+version = "0.1.0"
+edition = "2021"
+description = "Reliability package for llmalib: validation, guards, reflection-based retry"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+regex = "1.10"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+# Re-export core types
+llmalib-core = { path = "../core" }
+
+[lib]
+path = "mod.rs"
