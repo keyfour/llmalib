@@ -1,3 +1,3 @@
 [workspace]
-members = ["src/packages/core", "src/packages/memory", "src/packages/reliability"]
+members = ["src/packages/core", "src/packages/memory", "src/packages/reliability", "src/packages/debug"]
 resolver = "2"

@@ -1,0 +1,19 @@
+[package]
+name = "llmalib-debug"
+version = "0.1.0"
+edition = "2021"
+description = "Observability tools for llmalib: tracer, inspector, replay"
+
+[lib]
+name = "llmalib_debug"
+path = "mod.rs"
+
+[dependencies]
+llmalib-core = { path = "../core" }
+llmalib-reliability = { path = "../reliability" }
+llmalib-memory = { path = "../memory" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+thiserror = "2.0"
+uuid = "1.0"

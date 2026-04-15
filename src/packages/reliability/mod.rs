@@ -25,9 +25,9 @@
 //! error as a new user turn — verbal reinforcement — is more effective than simply
 //! retrying. For small models, this matters more than for large ones.
 
-mod guard;
-mod retry;
-mod validator;
+pub mod guard;
+pub mod retry;
+pub mod validator;
 
 // Re-export public API
 pub use guard::{field_in_set, float_in_range, max_length, no_content_from_outside_context};
