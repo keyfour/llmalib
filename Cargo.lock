@@ -589,7 +589,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
- "uuid",
 ]
 
 [[package]]
@@ -602,6 +601,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "llmalib-pipeline"
+version = "0.1.0"
+dependencies = [
+ "llmalib-core",
+ "llmalib-debug",
+ "llmalib-memory",
+ "llmalib-reliability",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

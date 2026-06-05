@@ -1,0 +1,13 @@
+[package]
+name = "llmalib-pipeline"
+version = "0.1.0"
+edition = "2021"
+description = "Pipeline orchestration for llmalib: sequential task execution with routing"
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+llmalib-core = { path = "../llmalib-core" }
+llmalib-memory = { path = "../llmalib-memory" }
+llmalib-debug = { path = "../llmalib-debug" }
+llmalib-reliability = { path = "../llmalib-reliability" }

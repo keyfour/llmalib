@@ -29,10 +29,12 @@ use crate::Context;
 /// # Example
 ///
 /// ```
-/// use llmalib::core::{Guard, Context};
+/// use llmalib_core::guard::Guard;
+/// use llmalib_core::context::Context;
+/// use serde_json::json;
 ///
 /// // A guard that checks if a field value is valid
-/// fn my_guard(value: &serde_json::Value, ctx: &Context) -> Vec<String> {
+/// fn my_guard(value: &serde_json::Value, _ctx: &Context) -> Vec<String> {
 ///     if let Some(data) = value.as_object() {
 ///         if let Some(name) = data.get("name") {
 ///             if name.as_str().unwrap_or("") == "" {
@@ -54,8 +56,8 @@ impl<F> Guard for F
 where
     F: Fn(&serde_json::Value, &Context) -> Vec<String> + Send + Sync + 'static,
 {
-    fn validate(&self, _value: &serde_json::Value, _context: &Context) -> Vec<String> {
-        Vec::new()
+    fn validate(&self, value: &serde_json::Value, context: &Context) -> Vec<String> {
+        self(value, context)
     }
 }
 

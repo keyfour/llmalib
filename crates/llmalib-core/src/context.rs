@@ -97,6 +97,10 @@ pub fn make_context() -> Context {
 
 /// Update a context with a task result.
 pub fn update_context(ctx: &mut Context, result: &TaskResult) {
+    // Store result in results map
+    if let Ok(json_result) = serde_json::to_value(result.clone()) {
+        ctx.results.insert(result.task_name.clone(), json_result);
+    }
     ctx.merge_result(result);
 }
 impl Default for Context {

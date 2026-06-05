@@ -1,3 +1,9 @@
 [workspace]
-members = ["src/packages/core", "src/packages/memory", "src/packages/reliability", "src/packages/debug"]
+members = [
+    "crates/llmalib-core",
+    "crates/llmalib-memory",
+    "crates/llmalib-reliability",
+    "crates/llmalib-debug",
+    "crates/llmalib-pipeline",
+]
 resolver = "2"

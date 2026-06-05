@@ -2,6 +2,7 @@
 name = "llmalib-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core types for llmalib: Task, Result, Context, and HTTP client"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -11,5 +12,4 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 tokio = { version = "1.0", features = ["full"] }
 
-[lib]
-path = "mod.rs"
+[dev-dependencies]
