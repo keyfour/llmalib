@@ -4,7 +4,9 @@ This document provides essential information for agents working with the `llmali
 
 ## Project Overview
 
-`llmalib` is a minimal, transparent Python library for building agentic pipelines with local small language models. It's designed around empirical research findings about small model behavior and focuses on narrow, schema-constrained tasks.
+`llmalib` is a minimal, transparent library for building agentic pipelines with local small language models. It's designed around empirical research findings about small model behavior and focuses on narrow, schema-constrained tasks.
+
+The project is currently in transition from Python to Rust, with both implementations coexisting. The Python version (`llmalib/` directory) is the original implementation and is considered stable. The Rust version (`src/` directory) is an ongoing migration effort, with core functionality migrated and other modules in progress.
 
 **Key Design Principles:**
 
@@ -12,14 +14,14 @@ This document provides essential information for agents working with the `llmali
 2. Structured output as the reliability layer  
 3. Transparent execution with full tracing
 4. Explicit context budgets to prevent rot
-5. Functional Python approach (no class hierarchies)
+5. Functional approach (no class hierarchies)
 6. Minimal dependencies
 
 ## Project Structure
 
 ```
 llmalib/
-├── llmalib/                    # Main package
+├── llmalib/                    # Original Python package
 │   ├── core/                   # Foundational types and HTTP client
 │   │   ├── client.py          # HTTP wrapper for local LLM inference
 │   │   ├── task.py            # Task dataclass + schema enforcement
@@ -41,8 +43,42 @@ llmalib/
 │       ├── tracer.py          # Records every attempt
 │       ├── inspector.py       # Rich console output
 │       └── replay.py          # Trace replay capability
-├── tests/                      # Comprehensive test suite
-└── docs/                       # Module documentation
+├── src/                         # Rust migration (in progress)
+│   ├── lib.rs                 # Workspace root
+│   ├── Cargo.toml             # Workspace definition
+│   └── packages/              # Individual Rust packages
+│       ├── core/              # Core functionality (migrated)
+│       │   ├── client.rs      # HTTP client wrapper
+│       │   ├── context.rs     # Shared mutable state
+│       │   ├── guard.rs       # Reliability guards
+│       │   ├── mod.rs         # Exports
+│       │   ├── result.rs      # Result envelope
+│       │   └── task.rs        # Task definition
+│       ├── memory/            # Memory management (in progress)
+│       │   ├── context_window.rs
+│       │   ├── examples.rs
+│       │   ├── mod.rs
+│       │   └── store.rs
+│       ├── reliability/       # Reliability features (in progress)
+│       │   ├── guard.rs
+│       │   ├── mod.rs
+│       │   ├── retry.rs
+│       │   └── validator.rs
+│       └── debug/             # Debugging tools (planned)
+│           ├── inspector.rs
+│           ├── mod.rs
+│           ├── replay.rs
+│           └── tracer.rs
+├── tests/                      # Python test suite
+├── docs/                       # Documentation
+│   ├── core.md                # Python core module docs
+│   ├── debug.md               # Python debug module docs
+│   ├── memory.md              # Python memory module docs
+│   ├── pipeline.md            # Python pipeline module docs
+│   ├── reliability.md         # Python reliability module docs
+│   ├── research.md            # Research foundations
+│   └── MIGRATION.md           # Rust migration guide (to be created)
+└── ...                        # Config files (pyproject.toml, Cargo.toml, etc.)
 ```
 
 ## Essential Commands
@@ -50,23 +86,32 @@ llmalib/
 ### Development Setup
 
 ```bash
-# Install dependencies
+# Install Python dependencies
 uv sync
 
-# Install with development dependencies
+# Install Python development dependencies
 uv sync --extra dev
 
-# Run development server (if needed)
-# No built-in server - depends on local LLM setup
+# Install Rust toolchain (if not already installed)
+rustup update
+
+# Build Rust packages
+cargo build --workspace
+
+# Run Rust tests
+cargo test --workspace
+
+# Run specific Rust package tests
+cargo test -p llmalib-core
 ```
 
 ### Testing
 
 ```bash
-# Run all tests with coverage
+# Run all Python tests with coverage
 pytest --cov=llmalib --cov-report=term-missing --cov-report=html
 
-# Run specific test file
+# Run specific Python test file
 pytest tests/test_core.py
 
 # Run with verbose output
@@ -74,22 +119,40 @@ pytest -v
 
 # Run tests matching pattern
 pytest -k "test_task"
+
+# Run all Rust tests
+cargo test --workspace
+
+# Run Rust tests for specific package
+cargo test -p llmalib-core
+
+# Run Rust tests with verbose output
+cargo test -- --nocapture
 ```
 
 ### Code Quality
 
 ```bash
-# Lint with ruff
+# Lint Python code with ruff
 ruff check llmalib/
 
-# Format code with ruff
+# Format Python code with ruff
 ruff format llmalib/
 
 # Type checking with mypy
 mypy llmalib/
 
+# Check Rust code formatting
+cargo fmt -- --check
+
+# Format Rust code
+cargo fmt
+
+# Clippy linting for Rust
+cargo clippy --workspace -- -D warnings
+
 # Run all quality checks
-ruff check && ruff format && mypy
+ruff check && ruff format && mypy && cargo fmt -- --check && cargo clippy --workspace -- -D warnings
 ```
 
 ### Building
@@ -101,7 +164,9 @@ ruff check && ruff format && mypy
 
 ## Code Organization and Patterns
 
-### Core Data Structures
+### Python Implementation
+
+**Core Data Structures**
 
 **Task** (`llmalib/core/task.py`):
 
@@ -124,87 +189,84 @@ ruff check && ruff format && mypy
 - `results: dict` mapping task names to their results
 - `run_id: str` for trace correlation
 
-### Code Patterns
+### Rust Implementation (in progress)
 
-1. **Functional Style**: Operations are functions, not methods. No inheritance hierarchies.
-2. **Immutable Data**: Core types are frozen dataclasses.
-3. **Pydantic Schemas**: Every task declares its output shape upfront.
-4. **Jinja2 Templates**: User prompts are templates with context variables.
-5. **Error Handling**: Never raises - returns error envelopes.
-6. **Explicit Dependencies**: All dependencies are injected, not hidden.
+**Core Data Structures**
 
-### Import Patterns
+**Task** (`src/packages/core/task.rs`):
 
-```python
-# Core types
-from llmalib.core.task import Task
-from llmalib.core.result import Result, make_ok_result
-from llmalib.core.context import Context, make_context
+- Immutable struct with all fields public (no dataclass decorator needed)
+- Required: `name`, `prompt_template`, `output_schema`
+- Model config: `model`, `base_url`, `temperature`, `max_tokens`, `timeout`
+- Reliability: `max_retries`, `guards` (as Vec<Box<dyn Guard>>)
+- Context: `examples`, `token_budget`, `system_prompt` (Option<String>)
+- Uses builder pattern via `Task::new()` method with many parameters
+- Default values defined in the `new` method signature comments
 
-# Pipeline execution
-from llmalib.pipeline.pipeline import run_pipeline
+**Result** (`src/packages/core/result.rs`):
 
-# HTTP client
-from llmalib.core.client import call, ClientConfig
+- Envelope pattern similar to Python: `ok`, `value`, `error`
+- Includes attempt tracking for tracing
+- Uses `TaskResult` type with associated methods
 
-# Reliability
-from llmalib.reliability.validator import parse_response
-from llmalib.reliability.retry import run_with_retry
-```
+**Context** (`src/packages/core/context.rs`):
 
-## Testing Approach
+- Shared mutable state container for pipeline runs
+- `vars`: serde_json::Map<String, serde_json::Value> for template variables
+- `results`: serde_json::Map<String, serde_json::Value> mapping task names
+- `run_id`: Option<uuid::Uuid> for trace correlation
+- Only successful results merge fields into vars (prevents error propagation)
+- Provides `merge_result()` and `update_context()` functions
 
-### Test Structure
+### Code Patterns (Both Implementations)
 
-- Comprehensive test suite in `tests/` directory
-- Tests organized by module (`test_core.py`, `test_pipeline.py`, etc.)
-- Heavy use of `unittest.mock` for HTTP client mocking
-- Pydantic models for test data structures
-
-### Test Patterns
-
-```python
-# Common test pattern
-def test_task_defaults(self):
-    task = make_sample_task()
-    assert task.model == "llama3.2"
-    assert task.temperature == 0.1
-
-# Mock HTTP responses
-mock_response = MagicMock()
-mock_response.status_code = 200
-mock_response.json.return_value = {
-    "choices": [{"message": {"content": "hello world"}}]
-}
-with patch("httpx.post", return_value=mock_response):
-    result = call([{"role": "user", "content": "hi"}], config)
-```
-
-### Test Coverage
-
-- Current coverage target: 100% via `--cov=llmalib`
-- Coverage reports generated in HTML and terminal
-- Tests cover all modules including error paths
+1. **Functional Style**: Operations are functions, not methods on core types
+2. **Immutable Data**: Core types are immutable/frozen (Python: @dataclass(frozen=True), Rust: struct with no mut methods)
+3. **Schema Validation**: Every task declares output shape upfront (Python: Pydantic, Rust: serde_json::Value)
+4. **Templating**: User prompts use template variables (Python: Jinja2, Rust: likely similar approach)
+5. **Error Handling**: Never raises - returns error envelopes/types
+6. **Explicit Dependencies**: All dependencies are injected, not hidden
+7. **Token Budget**: Every task has token_budget for context window enforcement
+8. **Retry Strategy**: Reflection-based retry that appends error context
+9. **Guard System**: Lightweight hallucination heuristics pluggable per task
 
 ## Dependencies and Configuration
 
-### Core Dependencies
+### Python Dependencies
+
+**Core Dependencies**
 
 - `pydantic>=2.0` - Schema validation and data models
 - `httpx>=0.25.0` - HTTP client for local LLM inference
 - `jinja2>=3.1.0` - Template rendering for prompts
 - `rich>=13.0.0` - Optional rich console output
 
-### Development Dependencies
+**Development Dependencies**
 
 - `pytest>=7.0.0` - Testing framework
 - `pytest-cov>=4.0.0` - Coverage reporting
 - `ruff>=0.4.0` - Linting and formatting
 - `mypy>=1.0.0` - Type checking
 
+### Rust Dependencies
+
+**Core Dependencies** (see src/packages/*/Cargo.toml)
+
+- `serde` - Serialization framework
+- `serde_json` - JSON handling
+- `thiserror` - Error handling
+- `uuid` - Unique identifiers
+- `reqwest` - HTTP client (blocking and JSON features)
+- `tokio` - Async runtime (full features)
+
+**Development Dependencies**
+
+- `rustfmt` - Code formatting
+- `clippy` - Linting
+
 ### Configuration Files
 
-**pyproject.toml**:
+**pyproject.toml** (Python):
 
 - Line length: 88 characters
 - Target Python: 3.9+
@@ -212,9 +274,21 @@ with patch("httpx.post", return_value=mock_response):
 - MyPy: strict mode enabled
 - Pytest: coverage enabled by default
 
+**Cargo.toml** (Rust workspace):
+
+- Defines workspace members: core, memory, reliability, debug
+- Uses edition 2021
+- Resolver = "2"
+
+**Rust package Cargo.toml examples** (llmalib-core):
+
+- Dependencies as listed above
+- Library path set to mod.rs
+
 **.gitignore**:
 
 - Standard Python ignores
+- Standard Rust ignores (target/, Cargo.lock)
 - Coverage reports
 - Lock files
 
@@ -320,4 +394,3 @@ The library is built on specific research findings:
 - Iterative reflection improves reliability more than simple retry
 
 See `docs/research.md` for detailed references.
-
