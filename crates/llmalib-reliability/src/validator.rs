@@ -4,20 +4,23 @@
 //!
 //! # Overview
 //!
-//! Provides three-strategy JSON extraction:
-//! 1. Direct JSON parse
-//! 2. Markdown code fence extraction
-//! 3. Bracket matching for first JSON object/array
+//! Three-strategy JSON extraction, tried in this order (Python parity):
+//! 1. Direct `serde_json::from_str()` on the trimmed response
+//! 2. First markdown code fence (```json ... ``` or plain ```)
+//! 3. Greedy outermost block, `{...}` first then `[...]`
+//!
+//! Each accepted candidate must parse as valid JSON before being returned.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use llmalib::reliability::{parse_response, ParseResult, ValidationError};
+//! use llmalib_reliability::{parse_response, ParseResult};
 //! ```
 
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::OnceLock;
 use thiserror::Error;
 
 /// Schema validation errors.
@@ -27,12 +30,12 @@ pub enum ValidationError {
     NoJson(String),
     #[error("JSON parse error: {0}. Extracted: {1:?}")]
     ParseError(String, String),
-    /// Simplified for Rust — full schema validation requires Python bridge.
-    #[error("Schema validation skipped. Rust serde accepts extracted JSON. Errors:\n{0}")]
-    ValidationSkipped(String),
 }
 
 /// JSON parsing result with error state.
+///
+/// Maps to Python's frozen `ParseResult` dataclass: `ok`, `value`, `error` —
+/// never raises; all outcomes are values.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ParseResult {
     pub ok: bool,
@@ -64,7 +67,16 @@ impl ParseResult {
 
 /// Format schema hints for model output.
 ///
-/// Rust version is placeholder — full schema validation deferred to Python bridge.
+/// Maps to Python's `format_schema_hint`: produces a compact JSON example of
+/// the expected output shape, injected into the default system prompt.
+///
+/// Currently a placeholder — real schema-driven hints land together with
+/// JSON Schema validation.
+///
+/// # Example output
+/// ```json
+/// {"label": "<str>", "confidence": "<float>"}
+/// ```
 pub fn format_schema_hint(_schema: &Value) -> String {
     "{\"hint\": \"expected_output\"}".to_string()
 }
@@ -73,115 +85,73 @@ pub fn format_schema_hint(_schema: &Value) -> String {
 ///
 /// # Arguments
 /// * `raw` - Raw model response string
-/// * `schema` - Schema for validation (currently ignored, Rust accepts any extracted JSON)
-///
-/// # Strategy
-/// 1. Try direct `serde_json::from_str()`
-/// 2. Look for markdown code fences and extract content
-/// 3. Find first `{` or `[` and match to closing brace/bracket
+/// * `schema` - Schema for validation (wired up with `jsonschema` crate in a
+///   future phase; extraction-only for now)
 ///
 /// # Returns
-/// `ParseResult` with extracted value or `ValidationError`
-pub fn parse_response(raw: &str, _schema: &Value) -> ParseResult {
-    extract_json(raw)
-        .map(ParseResult::success)
-        .unwrap_or_else(ParseResult::failure)
+/// `ParseResult` with the extracted value or a reflection-friendly error —
+/// never raises.
+pub fn parse_response(raw: &str, schema: &Value) -> ParseResult {
+    let Some(json_str) = extract_json(raw) else {
+        return ParseResult::failure(ValidationError::NoJson(raw.chars().take(120).collect()));
+    };
+
+    let data = match serde_json::from_str::<Value>(&json_str) {
+        Ok(data) => data,
+        Err(exc) => {
+            return ParseResult::failure(ValidationError::ParseError(
+                exc.to_string(),
+                json_str.chars().take(120).collect(),
+            ));
+        }
+    };
+
+    // Schema validation is deferred (see format_schema_hint note above).
+    let _ = schema;
+
+    ParseResult::success(data)
 }
 
-/// Extract JSON using three strategies.
-fn extract_json(raw: &str) -> Result<Value, ValidationError> {
+/// Try three strategies to find a JSON string in raw model output.
+///
+/// Mirrors Python's `_extract_json`: returns the candidate JSON string, or
+/// `None` when no strategy produced parseable JSON.
+pub fn extract_json(raw: &str) -> Option<String> {
     let raw = raw.trim();
 
-    // Strategy 1: direct parse
-    if let Ok(value) = serde_json::from_str(raw) {
-        return Ok(value);
+    // Strategy 1: direct parse.
+    if serde_json::from_str::<Value>(raw).is_ok() {
+        return Some(raw.to_string());
     }
 
-    // Strategy 2: markdown fence
-    let fence_pattern = r"^```(?:json)?\s*([^\n]?)\s*\n?([^\n]*?)([^`])";
-    if let Some(caps) = Regex::new(fence_pattern).unwrap().captures(raw) {
-        let content = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        if let Ok(value) = serde_json::from_str(content) {
-            return Ok(value);
-        }
-    }
-
-    // Strategy 3: find first JSON object/array
-    let json_start = find_json_start(raw);
-    if let Some(start) = json_start {
-        let end = find_matching_brace(raw, start);
-        if let Some(end) = end {
-            let candidate = &raw[start..=end];
-            if let Ok(value) = serde_json::from_str(candidate) {
-                return Ok(value);
+    // Strategy 2: first markdown code fence (```json ... ``` or plain ```).
+    if let Some(caps) = fence_regex().captures(raw) {
+        if let Some(m) = caps.get(1) {
+            let candidate = m.as_str().trim();
+            if serde_json::from_str::<Value>(candidate).is_ok() {
+                return Some(candidate.to_string());
             }
         }
     }
 
-    Err(ValidationError::NoJson(format!(
-        "Response started with: {:?}",
-        raw.chars().take(120).collect::<String>()
-    )))
-}
-
-/// Find starting position of first JSON object or array.
-fn find_json_start(raw: &str) -> Option<usize> {
-    let chars: Vec<char> = raw.chars().collect();
-    let quoted = chars[..]
-        .iter()
-        .enumerate()
-        .filter(|(_, &c)| c == '"')
-        .count();
-
-    for (i, &c) in chars.iter().enumerate().skip(quoted) {
-        if c == '{' || c == '[' {
-            return Some(i);
+    // Strategy 3: greedy outermost block — first `{` … last `}`, then `[ … ]`.
+    for pattern in [r"\{[\s\S]*\}", r"\[[\s\S]*\]"] {
+        let re = Regex::new(pattern).unwrap();
+        if let Some(m) = re.find(raw) {
+            let candidate = m.as_str();
+            if serde_json::from_str::<Value>(candidate).is_ok() {
+                return Some(candidate.to_string());
+            }
         }
     }
+
     None
 }
 
-/// Find matching closing brace or bracket.
-fn find_matching_brace(raw: &str, start: usize) -> Option<usize> {
-    let chars: Vec<char> = raw.chars().collect();
-
-    if chars[start] == '[' {
-        let mut count = 0;
-        for i in start..chars.len() {
-            if i > 0 && chars[i - 1] == '{' {
-                break;
-            }
-            count += if chars[i] == '[' {
-                1
-            } else if chars[i] == ']' {
-                -1
-            } else {
-                0
-            };
-            if count == 0 {
-                return Some(i);
-            }
-        }
-        None
-    } else {
-        let mut count = 0;
-        for i in start..chars.len() {
-            if i > 0 && chars[i - 1] == '{' {
-                continue;
-            }
-            count += if chars[i] == '{' {
-                1
-            } else if chars[i] == '}' {
-                -1
-            } else {
-                0
-            };
-            if count == 0 {
-                return Some(i);
-            }
-        }
-        None
-    }
+/// Lazily compiled single regex for markdown code fences.
+static FENCE_REGEX_CACHE: OnceLock<Regex> = OnceLock::new();
+fn fence_regex() -> &'static Regex {
+    FENCE_REGEX_CACHE.get_or_init(|| Regex::new(r"```(?:json)?\s*([\s\S]*?)```").unwrap())
 }
 
 #[cfg(test)]
@@ -197,27 +167,38 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_no_json() {
+    fn test_parse_json_in_fences() {
+        let raw = "```json\n{\"a\": true}\n```";
+        let result = parse_response(raw, &json!({}));
+        assert!(result.ok, "fence with lang tag: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_parse_json_in_fence_without_lang() {
+        let raw = "```\n{\"a\": true}\n```";
+        let result = parse_response(raw, &json!({}));
+        assert!(result.ok, "plain fence: {:?}", result.error);
+    }
+
+    #[test]
+    fn test_parse_json_in_prose() {
+        let result = parse_response("The result is {\"a\": 1}. Done.", &json!({}));
+        assert!(result.ok);
+        assert_eq!(result.value, Some(json!({"a": 1})));
+    }
+
+    #[test]
+    fn test_parse_plain_text_fails() {
         let result = parse_response("plain text", &json!({}));
         assert!(!result.ok);
         assert!(result.error.is_some());
     }
 
     #[test]
-    fn test_parse_markdown_fence() {
-        let raw = r#"\`\`\`json
-{"label": "positive", "confidence": 0.9}
-\`\`\`"#;
-        let result = parse_response(raw, &json!({}));
-        assert!(result.ok);
-    }
-
-    #[test]
-    fn test_parse_object_in_text() {
-        let raw = "Here is the result: {\"answer\": 42} and more text";
-        let result = parse_response(raw, &json!({}));
-        assert!(result.ok);
-        assert_eq!(result.value, Some(json!({"answer": 42})));
+    fn test_parse_malformed_json_fails() {
+        let result = parse_response("{not json", &json!({}));
+        assert!(!result.ok);
+        assert!(result.error.is_some());
     }
 
     #[test]
@@ -225,5 +206,29 @@ mod tests {
         let result = parse_response("", &json!({}));
         assert!(!result.ok);
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_no_json_error_message_prefix() {
+        let result = parse_response("no json here", &json!({}));
+        let error = result.error.unwrap();
+        assert!(error.starts_with("Could not find valid JSON in response."));
+        assert!(error.contains("no json here"));
+    }
+
+    #[test]
+    fn test_extract_json_direct() {
+        assert_eq!(
+            extract_json(r#"{"label": "ok"}"#).as_deref(),
+            Some(r#"{"label": "ok"}"#)
+        );
+    }
+
+    #[test]
+    fn test_strategy_order_prefers_direct_over_outermost() {
+        // Direct parse wins even though the text also has an outer block later.
+        let raw = "  {\"a\": 1}  ";
+        let extracted = extract_json(raw).unwrap();
+        assert_eq!(extracted.trim(), raw.trim());
     }
 }

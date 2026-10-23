@@ -132,25 +132,6 @@ pub fn trim_to_budget(
         return Ok((input.to_string(), 0)); // Already within budget
     }
 
-    // Try to find and remove assistant turns first
-    // Look for lines that might be assistant responses
-    #[allow(clippy::needless_range_loop)]
-    let mut lines_to_keep: Vec<usize> = Vec::new();
-    let mut current_line: usize = 0;
-
-    for line in lines.iter() {
-        let is_assistant =
-            line.trim().starts_with("Assistant:") || line.trim().starts_with("assistant:");
-
-        if is_assistant {
-            // Include this assistant turn in trimming
-            continue;
-        }
-
-        lines_to_keep.push(current_line);
-        current_line += 1;
-    }
-
     // Keep all lines, but trim long ones
     let mut trimmed_lines: Vec<String> = Vec::new();
     let mut tokens_current = 0;

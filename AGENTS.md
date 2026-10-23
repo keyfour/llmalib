@@ -6,7 +6,7 @@ This document provides essential information for agents working with the `llmali
 
 `llmalib` is a minimal, transparent library for building agentic pipelines with local small language models. It's designed around empirical research findings about small model behavior and focuses on narrow, schema-constrained tasks.
 
-The project is currently in transition from Python to Rust, with both implementations coexisting. The Python version (`llmalib/` directory) is the original implementation and is considered stable. The Rust version (`src/` directory) is an ongoing migration effort, with core functionality migrated and other modules in progress.
+The project is currently in transition from Python to Rust, with both implementations coexisting. The Python version (`llmalib/` directory) is the original implementation and is considered stable. The Rust version (`crates/` directory) is an ongoing migration effort — see `.plan.md` (local, untracked) for the phase plan; core/reliability/debug/memory basics have been migrated, pipeline and bindings remain in progress.
 
 **Key Design Principles:**
 
@@ -43,32 +43,23 @@ llmalib/
 │       ├── tracer.py          # Records every attempt
 │       ├── inspector.py       # Rich console output
 │       └── replay.py          # Trace replay capability
-├── src/                         # Rust migration (in progress)
-│   ├── lib.rs                 # Workspace root
-│   ├── Cargo.toml             # Workspace definition
-│   └── packages/              # Individual Rust packages
-│       ├── core/              # Core functionality (migrated)
-│       │   ├── client.rs      # HTTP client wrapper
-│       │   ├── context.rs     # Shared mutable state
-│       │   ├── guard.rs       # Reliability guards
-│       │   ├── mod.rs         # Exports
-│       │   ├── result.rs      # Result envelope
-│       │   └── task.rs        # Task definition
-│       ├── memory/            # Memory management (in progress)
-│       │   ├── context_window.rs
-│       │   ├── examples.rs
-│       │   ├── mod.rs
-│       │   └── store.rs
-│       ├── reliability/       # Reliability features (in progress)
-│       │   ├── guard.rs
-│       │   ├── mod.rs
-│       │   ├── retry.rs
-│       │   └── validator.rs
-│       └── debug/             # Debugging tools (planned)
-│           ├── inspector.rs
-│           ├── mod.rs
-│           ├── replay.rs
-│           └── tracer.rs
+├── crates/                     # Rust workspace (migration target)
+│   ├── llmalib-core/           # Core: Task, Result, Context, client, Guard trait
+│   │   └── src/
+│   │       ├── client.rs       # HTTP client wrapper (reqwest blocking)
+│   │       ├── context.rs      # Shared mutable state
+│   │       ├── guard.rs        # Guard trait definition
+│   │       ├── result.rs       # Result envelope (TaskResult / Attempt)
+│   │       ├── task.rs         # Task definition + builder
+│   │       └── lib.rs          # Package exports
+│   ├── llmalib-memory/         # KV stores, token budgeting, few-shot examples
+│   │   └── src/ {context_window,examples,store,lib}.rs
+│   ├── llmalib-reliability/    # Validation, guards, reflection-based retry
+│   │   └── src/ {guard,retry,validator,lib}.rs
+│   ├── llmalib-debug/          # Tracer, inspector, replay
+│   │   └── src/ {inspector,replay,tracer,lib}.rs
+│   └── llmalib-pipeline/       # Sequential pipeline orchestration
+│       └── src/ {pipeline,lib}.rs
 ├── tests/                      # Python test suite
 ├── docs/                       # Documentation
 │   ├── core.md                # Python core module docs
@@ -193,30 +184,32 @@ ruff check && ruff format && mypy && cargo fmt -- --check && cargo clippy --work
 
 **Core Data Structures**
 
-**Task** (`src/packages/core/task.rs`):
+**Task** (`crates/llmalib-core/src/task.rs`):
 
 - Immutable struct with all fields public (no dataclass decorator needed)
 - Required: `name`, `prompt_template`, `output_schema`
 - Model config: `model`, `base_url`, `temperature`, `max_tokens`, `timeout`
-- Reliability: `max_retries`, `guards` (as Vec<Box<dyn Guard>>)
+- Reliability: `max_retries` (total attempt count, like Python), `guards` (`Vec<Arc<dyn Guard>>`)
 - Context: `examples`, `token_budget`, `system_prompt` (Option<String>)
-- Uses builder pattern via `Task::new()` method with many parameters
-- Default values defined in the `new` method signature comments
+- Create via `Task::new(name, prompt_template, output_schema)` — applies documented Python defaults —
+  or override optional fields with `Task::builder(...)`
+- `Task` is `Clone`; clones share guard implementations via `Arc` (like Python shallow copies)
 
-**Result** (`src/packages/core/result.rs`):
+**Result** (`crates/llmalib-core/src/result.rs`):
 
 - Envelope pattern similar to Python: `ok`, `value`, `error`
 - Includes attempt tracking for tracing
 - Uses `TaskResult` type with associated methods
 
-**Context** (`src/packages/core/context.rs`):
+**Context** (`crates/llmalib-core/src/context.rs`):
 
 - Shared mutable state container for pipeline runs
 - `vars`: serde_json::Map<String, serde_json::Value> for template variables
 - `results`: serde_json::Map<String, serde_json::Value> mapping task names
-- `run_id`: Option<uuid::Uuid> for trace correlation
-- Only successful results merge fields into vars (prevents error propagation)
-- Provides `merge_result()` and `update_context()` functions
+- `run_id`: String (8-char uuid prefix, auto-generated; override via `with_run_id`)
+- Only successful results merge fields into vars under their **plain field names**
+  (prevents error propagation; matches Python's `{{ field }}` template access)
+- Provides `merge_result()`, `update_context()`, and `make_context(vars)`.
 
 ### Code Patterns (Both Implementations)
 
@@ -250,14 +243,15 @@ ruff check && ruff format && mypy && cargo fmt -- --check && cargo clippy --work
 
 ### Rust Dependencies
 
-**Core Dependencies** (see src/packages/*/Cargo.toml)
+**Core Dependencies** (see crates/*/Cargo.toml)
 
 - `serde` - Serialization framework
 - `serde_json` - JSON handling
 - `thiserror` - Error handling
-- `uuid` - Unique identifiers
-- `reqwest` - HTTP client (blocking and JSON features)
-- `tokio` - Async runtime (full features)
+- `uuid` - Run id generation (llmalib-core)
+- `reqwest` - HTTP client (blocking and JSON features, llmalib-core)
+- `regex` - JSON extraction / tokenization (reliability, memory)
+- `chrono` - Timestamps (llmalib-debug)
 
 **Development Dependencies**
 
@@ -276,8 +270,8 @@ ruff check && ruff format && mypy && cargo fmt -- --check && cargo clippy --work
 
 **Cargo.toml** (Rust workspace):
 
-- Defines workspace members: core, memory, reliability, debug
-- Uses edition 2021
+- Defines workspace members: core, memory, reliability, pipeline, debug (crates/*)
+- Shared `[workspace.package]` provides version 0.1.0 and edition 2021 to all crates
 - Resolver = "2"
 
 **Rust package Cargo.toml examples** (llmalib-core):

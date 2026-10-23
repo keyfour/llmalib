@@ -5,7 +5,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use llmalib::core::{Result, Attempt};
+//! use llmalib_core::{Attempt, TaskResult};
 //! ```
 
 use serde::{Deserialize, Serialize};

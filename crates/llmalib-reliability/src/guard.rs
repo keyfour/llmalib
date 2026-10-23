@@ -5,21 +5,74 @@
 //! # Usage
 //!
 //! ```ignore
-//! use llmalib::reliability::{
-//!     Guard, field_in_set, float_in_range, max_length,
+//! use llmalib_reliability::{
+//!     Guard, ClosureGuard, field_in_set, float_in_range, max_length,
 //!     no_content_from_outside_context,
 //! };
 //! ```
 
 use llmalib_core::context::Context;
+use llmalib_core::guard::Guard as CoreGuard;
 use serde_json::Value;
+use std::sync::Arc;
+
+/// Raw closure type stored inside [ClosureGuard].
+pub type GuardFn = Arc<dyn Fn(&Value, &Context) -> Vec<String> + Send + Sync>;
+
+/// Bridge from a plain closure / function to the core [`CoreGuard`] trait.
+///
+/// Rust has no blanket coercion from `Fn(&Value, &Context) -> Vec<String>`
+/// onto `dyn Guard` (the compiler cannot prove the higher-ranked impl is
+/// general enough), so closure-based guards must be wrapped explicitly.
+/// This is the single bridge used by all guard factories below and by
+/// user code with closure guards.
+///
+/// ```
+/// use llmalib_reliability::guard::ClosureGuard;
+/// use llmalib_core::guard::Guard;
+/// use llmalib_core::context::Context;
+/// use serde_json::json;
+///
+/// let guard = ClosureGuard::new(|value: &serde_json::Value, _ctx: &Context| {
+///     if value.get("label").map(|v| v.as_str() == Some("x")).unwrap_or(false) {
+///         vec!["label 'x' is forbidden".to_string()]
+///     } else {
+///         Vec::new()
+///     }
+/// });
+/// assert!(guard.validate(&json!({"label": "y"}), &Context::new()).is_empty());
+/// assert!(!guard.validate(&json!({"label": "x"}), &Context::new()).is_empty());
+/// ```
+pub struct ClosureGuard {
+    f: GuardFn,
+}
+
+impl ClosureGuard {
+    /// Wrap any closure or function with the guard signature.
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(&Value, &Context) -> Vec<String> + Send + Sync + 'static,
+    {
+        Self { f: Arc::new(f) }
+    }
+}
+
+impl CoreGuard for ClosureGuard {
+    fn validate(&self, value: &Value, context: &Context) -> Vec<String> {
+        (self.f)(value, context)
+    }
+}
 
 /// A guard that validates output values.
 ///
 /// Guards are lightweight, rule-based heuristics that return error messages
 /// (empty vector = pass). When a guard fails, error messages are fed back
 /// to the model via the reflection loop.
-pub type Guard = Box<dyn Fn(&Value, &Context) -> Vec<String> + Send + Sync + 'static>;
+///
+/// This is the single canonical [`Guard`] type: every factory in this module
+/// produces a value directly assignable to `Task::guards` (via the `guard()`
+/// builder method), and custom implementations of the core trait work too.
+pub type Guard = Box<dyn CoreGuard>;
 
 /// Check that a field value is in a set of allowed values.
 ///
@@ -32,19 +85,20 @@ pub type Guard = Box<dyn Fn(&Value, &Context) -> Vec<String> + Send + Sync + 'st
 /// # Returns
 /// A guard that checks if `value.<field>` is in `allowed`.
 pub fn field_in_set(field: &str, allowed: &[String]) -> Guard {
-    let allowed_set = allowed.to_vec();
+    let mut allowed_set = allowed.to_vec();
+    allowed_set.sort(); // mirrored in the error message, like Python's sorted(allowed)
     let field_name = field.to_string();
 
-    Box::new(move |value, _| {
+    Box::new(ClosureGuard::new(move |value, _| {
         let actual = get_nested_field_str(value, &field_name).unwrap_or_default();
         if !allowed_set.contains(&actual) {
             return vec![format!(
-                "Field '{}' must be one of {:?}, got {}",
+                "Field '{}' must be one of {:?}, got {:?}",
                 field_name, allowed_set, actual
             )];
         }
         Vec::new()
-    })
+    }))
 }
 
 /// Check that a float field is within a range.
@@ -61,19 +115,28 @@ pub fn field_in_set(field: &str, allowed: &[String]) -> Guard {
 pub fn float_in_range(field: &str, min_val: f64, max_val: f64) -> Guard {
     let field_name = field.to_string();
 
-    Box::new(move |value, _| {
-        let actual = get_nested_field_f64(value, &field_name);
-        match actual {
-            Some(f) if !(min_val..=max_val).contains(&f) => {
-                vec![format!(
-                    "Field '{}' must be between {} and {}, got {}",
-                    field_name, min_val, max_val, f
-                )]
+    Box::new(ClosureGuard::new(move |value, _| {
+        let nested = get_nested_value(value, &field_name);
+        let actual = match nested {
+            // Missing key or explicit null.
+            None | Some(Value::Null) => {
+                return vec![format!("Field '{}' is missing or None", field_name)]
             }
-            Some(_) => Vec::new(),
-            None => vec![format!("Field '{}' is missing or None", field_name)],
+            Some(v) => v,
+        };
+        let num = match actual.as_f64() {
+            None => return vec![format!("Field '{}' is not numeric", field_name)],
+            Some(f) => f,
+        };
+        if !(min_val..=max_val).contains(&num) {
+            vec![format!(
+                "Field '{}' must be between {} and {}, got {}",
+                field_name, min_val, max_val, num
+            )]
+        } else {
+            Vec::new()
         }
-    })
+    }))
 }
 
 /// Check that a field string does not exceed a maximum length.
@@ -89,7 +152,7 @@ pub fn float_in_range(field: &str, min_val: f64, max_val: f64) -> Guard {
 pub fn max_length(field: &str, max_chars: usize) -> Guard {
     let field_name = field.to_string();
 
-    Box::new(move |value, _| {
+    Box::new(ClosureGuard::new(move |value, _| {
         let actual = get_nested_field_str(value, &field_name);
 
         // Skip None values
@@ -107,7 +170,7 @@ pub fn max_length(field: &str, max_chars: usize) -> Guard {
         }
 
         Vec::new()
-    })
+    }))
 }
 
 /// Lightweight grounding check using Jaccard similarity.
@@ -133,7 +196,7 @@ pub fn no_content_from_outside_context(
     let response_field_name = response_field.to_string();
     let context_field_name = context_field.to_string();
 
-    Box::new(move |value, ctx| {
+    Box::new(ClosureGuard::new(move |value, ctx| {
         // Get response text
         let response_text = get_nested_field_str(value, &response_field_name).unwrap_or_default();
 
@@ -180,7 +243,7 @@ pub fn no_content_from_outside_context(
         }
 
         Vec::new()
-    })
+    }))
 }
 
 /// Helper: Get nested field value as String from a JSON object.
@@ -198,8 +261,8 @@ fn get_nested_field_str(value: &Value, field: &str) -> Option<String> {
     current.and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
-/// Helper: Get nested field value as f64 from a JSON object.
-fn get_nested_field_f64(value: &Value, field: &str) -> Option<f64> {
+/// Helper: Get a nested field by dotted path (does not coerce types).
+fn get_nested_value<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
     let mut current = Some(value);
     for part in field.split('.') {
         current = current.and_then(|v| {
@@ -210,7 +273,7 @@ fn get_nested_field_f64(value: &Value, field: &str) -> Option<f64> {
             }
         });
     }
-    current.and_then(|v| v.as_f64())
+    current
 }
 
 /// Tokenize text into lowercase word tokens.

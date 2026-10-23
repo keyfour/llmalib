@@ -35,7 +35,7 @@
 //!
 //! ```ignore
 //! // Record a run
-//! let mut tracer = llmalib::debug::make_tracer("run-123");
+//! let mut tracer = llmalib_debug::make_tracer("run-123");
 //! // ... run your pipeline ...
 //! tracer.record(&result);
 //!
@@ -43,8 +43,8 @@
 //! tracer.to_file("trace.json")?;
 //!
 //! // Load and replay
-//! let loaded = llmalib::debug::load_trace("trace.json")?;
-//! let result = llmalib::debug::replay_task(&loaded, "task_name", &..);
+//! let loaded = llmalib_debug::load_trace("trace.json")?;
+//! let result = llmalib_debug::replay_task(&loaded, "task_name", &..);
 //! ```
 
 pub mod inspector;
