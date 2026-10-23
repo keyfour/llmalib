@@ -107,48 +107,14 @@ mod tests {
 
     #[test]
     fn test_build_system_prompt_with_system_prompt() {
-        let task = Task::new(
-            "test",
-            "render: {{ input }}",
-            json!({"type": "object"}),
-            "model",
-            "url",
-            0.1,
-            1024u32,
-            120.0,
-            3u32,
-            vec![],
-            vec![],
-            2048u32,
-            Some("Custom system".to_string()),
-        );
+        let task = Task::builder("test", "render: {{ input }}", json!({"type": "object"}))
+            .system_prompt(Some("Custom system".to_string()))
+            .build();
         let system_content = if let Some(prompt) = &task.system_prompt {
             prompt.clone()
         } else {
             String::new()
         };
         assert!(system_content.contains("Custom system"));
-    }
-
-    #[test]
-    fn test_build_system_prompt_without_system_prompt() {
-        let task = Task::new(
-            "test",
-            "render: {{ input }}",
-            json!({"type": "object"}),
-            "model",
-            "url",
-            0.1,
-            1024u32,
-            120.0,
-            3u32,
-            vec![],
-            vec![],
-            2048u32,
-            None,
-        );
-        if task.system_prompt.is_none() {
-            let _ = 1; // Placeholder
-        }
     }
 }

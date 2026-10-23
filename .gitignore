@@ -256,3 +256,6 @@ Thumbs.db
 # Added by cargo
 
 /target
+
+# Local working plan (kept untracked on purpose)
+.plan.md

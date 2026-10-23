@@ -238,25 +238,6 @@ impl Drop for FileStore {
     }
 }
 
-/// BM25 ranking implementation
-#[allow(dead_code)]
-fn rank_entries(
-    _entries: &[(String, serde_json::Value)],
-    _query: &str,
-    _top_k: usize,
-) -> Vec<(String, serde_json::Value, f64)> {
-    Vec::new()
-}
-
-#[allow(dead_code)]
-pub struct StorageValue {
-    pub key: String,
-    pub value: serde_json::Value,
-    pub score: f64,
-    pub created_at: i64,
-    pub expires_at: Option<i64>,
-}
-
 /// Create an in-memory store (factory function)
 pub fn make_memory_store() -> Box<dyn Store> {
     Box::new(InMemoryStore::new())

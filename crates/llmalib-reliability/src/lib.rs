@@ -11,8 +11,8 @@
 //! - [`guard`] - Post-generation validation heuristics
 //! - [`retry`] - Reflection-based retry loop
 //!
-//! See [`TryParse`] for combining validators, and [`parse_response`] for
-//! the main entry point to parse and validate model output.
+//! See [`parse_response`] for the main entry point to parse and validate
+//! model output.
 //!
 //! # Research Background
 //!
