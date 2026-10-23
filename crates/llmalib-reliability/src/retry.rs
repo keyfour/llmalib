@@ -2,13 +2,17 @@
 //!
 //! Maps to `llmalib.reliability.retry` Python module.
 //!
+//! Validates against JSON Schema (`output_schema`), retries on failure;
+//! closure guards attach via `[guard::ClosureGuard]` and custom trait impls.
+//!
 //! # Usage
 //!
 //! ```ignore
 //! use llmalib_reliability::{run_with_retry, build_reflection_message};
+//! // Test seam: run_with_retry_with(task, ..., &mock_caller) — no real HTTP.
 //! ```
 
-use llmalib_core::client::{call, ClientConfig, ClientError};
+use llmalib_core::client::{Caller, ClientConfig, ClientError, HttpCaller};
 use llmalib_core::context::Context;
 use llmalib_core::result::{make_error_result, make_ok_result, Attempt, TaskResult};
 use llmalib_core::task::Task;
@@ -64,27 +68,45 @@ pub fn build_reflection_message(parse_error: Option<&str>, guard_errors: &[Strin
 ///
 /// # Returns
 /// TaskResult containing all attempts and final success/failure state.
+///
+/// Client errors (network etc.) are NOT retried — they propagate to the
+/// caller like Python's `run_with_retry`.
 pub fn run_with_retry(
+    task: &Task,
+    messages: Vec<Value>,
+    config: &ClientConfig,
+    ctx: &Context,
+) -> Result<TaskResult, ClientError> {
+    run_with_retry_with(task, messages, config, ctx, &HttpCaller)
+}
+
+/// [`run_with_retry`] with an explicit [`Caller`] injection (for tests and
+/// alternative transports).
+pub fn run_with_retry_with(
     task: &Task,
     mut messages: Vec<Value>,
     config: &ClientConfig,
     ctx: &Context,
+    caller: &dyn Caller,
 ) -> Result<TaskResult, ClientError> {
     let mut trace: Vec<Attempt> = Vec::new();
     let max_retries = task.max_retries;
-    let output_schema = &task.output_schema;
+    // Compile the output schema once for all attempts.
+    let validator = crate::validator::compile_schema(&task.output_schema);
 
     for attempt_num in 1..=max_retries {
         let started_at = Instant::now();
 
-        // Render messages for trace storage - serialize to JSON for display
-        let rendered =
-            serde_json::to_string(&messages).unwrap_or_else(|_| "<serialize error>".to_string());
+        // Render messages for trace storage — pretty-printed like Python's
+        // `json.dumps(messages, indent=2, ensure_ascii=False)`; replay parses
+        // this back into the exact prompt.
+        let rendered = serde_json::to_string_pretty(&messages)
+            .unwrap_or_else(|_| "<serialize error>".to_string());
 
-        let raw = call(messages.clone(), config)?;
+        let raw = caller.call(messages.clone(), config)?;
 
         // Parse response using this package's validator
-        let parse_result = crate::validator::parse_response(&raw, output_schema);
+        let parse_result = crate::validator::parse_with_validator(&raw, validator.as_ref());
 
         // Run guards on parsed value
         let guard_value = if parse_result.ok {

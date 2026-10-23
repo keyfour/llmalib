@@ -133,3 +133,23 @@ pub fn config_from_task(task: &Task) -> ClientConfig {
         max_tokens: task.max_tokens as usize,
     }
 }
+
+/// Injectable model-call transport.
+///
+/// The default implementation ([`HttpCaller`]) performs the real HTTP request.
+/// Tests and alternative transports implement this trait instead of reaching
+/// into the HTTP layer (mirrors how Python tests patch `retry.call`).
+pub trait Caller: Send + Sync {
+    /// Same contract as [`call`]: returns the assistant content or a [`ClientError`].
+    fn call(&self, messages: Vec<Value>, config: &ClientConfig) -> Result<String, ClientError>;
+}
+
+/// Default [`Caller`] performing real HTTP POST requests.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HttpCaller;
+
+impl Caller for HttpCaller {
+    fn call(&self, messages: Vec<Value>, config: &ClientConfig) -> Result<String, ClientError> {
+        call(messages, config)
+    }
+}

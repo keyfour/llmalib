@@ -10,3 +10,4 @@ serde_json = "1.0"
 regex = "1.10"
 thiserror = "2.0"
 llmalib-core = { path = "../llmalib-core" }
+llmalib-reliability = { path = "../llmalib-reliability" }

@@ -33,4 +33,7 @@ pub mod validator;
 pub use guard::{field_in_set, float_in_range, max_length, no_content_from_outside_context};
 pub use llmalib_core::context::Context;
 pub use retry::{build_reflection_message, run_with_retry};
-pub use validator::{format_schema_hint, parse_response, ParseResult, ValidationError};
+pub use validator::{
+    compile_schema, format_schema_hint, parse_response, parse_with_validator, ParseResult,
+    ValidationError,
+};
