@@ -43,14 +43,23 @@ impl std::fmt::Display for BudgetExceededError {
 pub fn count_tokens(text: &str, tokenizer: Option<Tokenizer>) -> usize {
     match tokenizer {
         Some(f) => f(text),
-        None => std::cmp::max(1, text.chars().count() / 4),
+        None => default_tokenizer(text),
+    }
+}
+
+/// [`count_tokens`] with a boxed/closure tokenizer (used by the pyo3 binding
+/// to accept Python callables).
+pub fn count_tokens_dyn(text: &str, tokenizer: Option<&dyn Fn(&str) -> usize>) -> usize {
+    match tokenizer {
+        Some(f) => f(text),
+        None => default_tokenizer(text),
     }
 }
 
 /// Alias for the default estimate, kept as a named function so it can be
 /// passed as a `Tokenizer` where a non-Option one is required.
 pub fn default_tokenizer(text: &str) -> usize {
-    count_tokens(text, None)
+    std::cmp::max(1, text.chars().count() / 4)
 }
 
 /// Return a (possibly trimmed) copy of messages that fits within budget tokens.
@@ -73,12 +82,25 @@ pub fn trim_to_budget(
     budget: usize,
     tokenizer: Option<Tokenizer>,
 ) -> Result<Vec<serde_json::Value>, BudgetExceededError> {
+    match tokenizer {
+        Some(f) => trim_to_budget_with(messages, budget, Some(&f as &dyn Fn(&str) -> usize)),
+        None => trim_to_budget_with(messages, budget, None),
+    }
+}
+
+/// [`trim_to_budget`] with a boxed/closure tokenizer (used by the pyo3
+/// binding to accept Python callables).
+pub fn trim_to_budget_with(
+    messages: Vec<serde_json::Value>,
+    budget: usize,
+    tokenizer: Option<&dyn Fn(&str) -> usize>,
+) -> Result<Vec<serde_json::Value>, BudgetExceededError> {
     if messages.is_empty() {
         return Ok(Vec::new());
     }
 
     let msg_tokens = |m: &serde_json::Value| -> usize {
-        count_tokens(
+        count_tokens_dyn(
             m.get("content").and_then(|c| c.as_str()).unwrap_or(""),
             tokenizer,
         )
@@ -121,8 +143,8 @@ pub fn trim_to_budget(
             let original = msg_content(&result[i]).to_string();
             let shortened = keep_first_and_last_sentence(&original);
             if shortened.chars().count() < original.chars().count() {
-                let saved =
-                    count_tokens(&original, tokenizer) - count_tokens(&shortened, tokenizer);
+                let saved = count_tokens_dyn(&original, tokenizer)
+                    - count_tokens_dyn(&shortened, tokenizer);
                 set_content(&mut result[i], shortened);
                 current_tokens = current_tokens.saturating_sub(saved);
             }
@@ -142,8 +164,8 @@ pub fn trim_to_budget(
             if original.chars().count() > max_chars {
                 let truncated: String =
                     original.chars().take(max_chars).collect::<String>() + " [truncated]";
-                let saved =
-                    count_tokens(&original, tokenizer) - count_tokens(&truncated, tokenizer);
+                let saved = count_tokens_dyn(&original, tokenizer)
+                    - count_tokens_dyn(&truncated, tokenizer);
                 set_content(&mut result[i], truncated);
                 current_tokens = current_tokens.saturating_sub(saved);
             }

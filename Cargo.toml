@@ -5,6 +5,7 @@ members = [
     "crates/llmalib-reliability",
     "crates/llmalib-debug",
     "crates/llmalib-pipeline",
+    "crates/llmalib-py",
 ]
 resolver = "2"
 

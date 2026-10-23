@@ -46,6 +46,10 @@ use crate::Context;
 ///         }
 ///         Vec::new()
 ///     }
+///
+///     fn as_any(&self) -> &dyn std::any::Any {
+///         self
+///     }
 /// }
 ///
 /// let guard: Arc<dyn Guard> = Arc::new(NonEmptyName);
@@ -54,4 +58,12 @@ use crate::Context;
 pub trait Guard: Send + Sync + 'static {
     /// Validates the given value and context, returning error strings or empty vec on success
     fn validate(&self, _value: &serde_json::Value, _context: &Context) -> Vec<String>;
+
+    /// Downcast support for binding layers.
+    ///
+    /// Binding crates (pyo3) use this to recover the concrete guard type when
+    /// marshalling a `Task` back across the boundary (e.g. re-extracting the
+    /// original Python callable from a `PyGuard`). Every implementor just
+    /// returns `self`.
+    fn as_any(&self) -> &dyn std::any::Any;
 }

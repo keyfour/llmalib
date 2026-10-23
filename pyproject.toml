@@ -1,6 +1,11 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "."
+module-name = "llmalib._rust"
+manifest-path = "crates/llmalib-py/Cargo.toml"
 
 [project]
 name = "llmalib"

@@ -284,6 +284,10 @@ mod tests {
         fn validate(&self, _value: &serde_json::Value, _ctx: &Context) -> Vec<String> {
             vec!["always fails".to_string()]
         }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     #[test]

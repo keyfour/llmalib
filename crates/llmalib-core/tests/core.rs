@@ -216,6 +216,10 @@ impl CoreGuard for AlwaysFail {
     fn validate(&self, _value: &serde_json::Value, _context: &Context) -> Vec<String> {
         vec!["fail".to_string()]
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Unused in assertions but part of the Python API surface — keep alive so a

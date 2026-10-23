@@ -61,6 +61,10 @@ impl CoreGuard for ClosureGuard {
     fn validate(&self, value: &Value, context: &Context) -> Vec<String> {
         (self.f)(value, context)
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// A guard that validates output values.
