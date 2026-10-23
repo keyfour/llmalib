@@ -72,7 +72,7 @@ impl CoreGuard for ClosureGuard {
 /// This is the single canonical [`Guard`] type: every factory in this module
 /// produces a value directly assignable to `Task::guards` (via the `guard()`
 /// builder method), and custom implementations of the core trait work too.
-pub type Guard = Box<dyn CoreGuard>;
+pub type Guard = Arc<dyn CoreGuard>;
 
 /// Check that a field value is in a set of allowed values.
 ///
@@ -84,12 +84,12 @@ pub type Guard = Box<dyn CoreGuard>;
 ///
 /// # Returns
 /// A guard that checks if `value.<field>` is in `allowed`.
-pub fn field_in_set(field: &str, allowed: &[String]) -> Guard {
+pub fn field_in_set(field: &str, allowed: &[String]) -> Arc<dyn CoreGuard> {
     let mut allowed_set = allowed.to_vec();
     allowed_set.sort(); // mirrored in the error message, like Python's sorted(allowed)
     let field_name = field.to_string();
 
-    Box::new(ClosureGuard::new(move |value, _| {
+    Arc::new(ClosureGuard::new(move |value, _| {
         let actual = get_nested_field_str(value, &field_name).unwrap_or_default();
         if !allowed_set.contains(&actual) {
             return vec![format!(
@@ -112,10 +112,10 @@ pub fn field_in_set(field: &str, allowed: &[String]) -> Guard {
 ///
 /// # Returns
 /// A guard that checks if `value.<field>` is between min and max.
-pub fn float_in_range(field: &str, min_val: f64, max_val: f64) -> Guard {
+pub fn float_in_range(field: &str, min_val: f64, max_val: f64) -> Arc<dyn CoreGuard> {
     let field_name = field.to_string();
 
-    Box::new(ClosureGuard::new(move |value, _| {
+    Arc::new(ClosureGuard::new(move |value, _| {
         let nested = get_nested_value(value, &field_name);
         let actual = match nested {
             // Missing key or explicit null.
@@ -149,10 +149,10 @@ pub fn float_in_range(field: &str, min_val: f64, max_val: f64) -> Guard {
 ///
 /// # Returns
 /// A guard that checks string length of `value.<field>`.
-pub fn max_length(field: &str, max_chars: usize) -> Guard {
+pub fn max_length(field: &str, max_chars: usize) -> Arc<dyn CoreGuard> {
     let field_name = field.to_string();
 
-    Box::new(ClosureGuard::new(move |value, _| {
+    Arc::new(ClosureGuard::new(move |value, _| {
         let actual = get_nested_field_str(value, &field_name);
 
         // Skip None values
@@ -192,11 +192,11 @@ pub fn no_content_from_outside_context(
     response_field: &str,
     context_field: &str,
     threshold: f64,
-) -> Guard {
+) -> Arc<dyn CoreGuard> {
     let response_field_name = response_field.to_string();
     let context_field_name = context_field.to_string();
 
-    Box::new(ClosureGuard::new(move |value, ctx| {
+    Arc::new(ClosureGuard::new(move |value, ctx| {
         // Get response text
         let response_text = get_nested_field_str(value, &response_field_name).unwrap_or_default();
 

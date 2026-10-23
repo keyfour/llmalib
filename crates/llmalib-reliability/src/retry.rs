@@ -124,16 +124,14 @@ pub fn run_with_retry_with(
         }
 
         // Record attempt
-        let duration_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-
-        let attempt = Attempt {
-            attempt_number: attempt_num as usize,
-            rendered_prompt: rendered,
-            raw_response: raw.clone(),
-            parse_error: parse_result.error.clone(),
-            guard_errors: guard_errors.clone(),
-            duration_ms,
-        };
+        let attempt = llmalib_core::result::make_attempt(
+            attempt_num as usize,
+            rendered,
+            raw.clone(),
+            parse_result.error.clone(),
+            guard_errors.clone(),
+            started_at,
+        );
 
         trace.push(attempt);
 

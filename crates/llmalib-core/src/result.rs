@@ -85,3 +85,25 @@ pub fn make_error_result(task_name: String, error: String, trace: Vec<Attempt>) 
         trace,
     }
 }
+
+/// Create an attempt, computing `duration_ms` from `started_at`.
+///
+/// Mirrors Python's `make_attempt(..., started_at)` (there `started_at` is a
+/// monotonic timestamp; here an `Instant`).
+pub fn make_attempt(
+    attempt_number: usize,
+    rendered_prompt: impl Into<String>,
+    raw_response: impl Into<String>,
+    parse_error: Option<String>,
+    guard_errors: Vec<String>,
+    started_at: std::time::Instant,
+) -> Attempt {
+    Attempt {
+        attempt_number,
+        rendered_prompt: rendered_prompt.into(),
+        raw_response: raw_response.into(),
+        parse_error,
+        guard_errors,
+        duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+    }
+}

@@ -57,7 +57,7 @@ impl Default for ClientConfig {
 /// - Missing or empty response content
 /// - Unexpected response shape
 pub fn call(messages: Vec<Value>, config: &ClientConfig) -> Result<String, ClientError> {
-    let url = format!("{}chat/completions", config.base_url.trim_end_matches('/'));
+    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
     let payload = serde_json::json!({
         "model": config.model,
@@ -69,52 +69,60 @@ pub fn call(messages: Vec<Value>, config: &ClientConfig) -> Result<String, Clien
 
     let client = Client::builder().timeout(config.timeout).build()?;
 
-    let response = client.post(&url).json(&payload).send()?;
+    let send_error = |e: reqwest::Error| -> ClientError {
+        if e.is_timeout() {
+            ClientError {
+                message: format!(
+                    "Request timed out after {}s (model={}, url={})",
+                    config.timeout.as_secs(),
+                    config.model,
+                    url
+                ),
+                status_code: None,
+            }
+        } else {
+            ClientError {
+                message: format!("Network error: {e} (url={url})"),
+                status_code: None,
+            }
+        }
+    };
+
+    let response = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .map_err(send_error)?;
 
     if response.status() != reqwest::StatusCode::OK {
         let status = response.status();
         let body = response.text().unwrap_or_default();
         return Err(ClientError {
             message: format!(
-                "HTTP error {status} from {url}: {body}",
-                status = status.as_u16(),
-                url = &url,
-                body = &body[..std::cmp::min(200, body.len())]
+                "HTTP {} from {url}: {}",
+                status.as_u16(),
+                truncate_200(&body)
             ),
             status_code: Some(status.as_u16()),
         });
     }
 
-    let data: Value = response.json().map_err(|e| ClientError {
-        message: format!("Failed to parse JSON response: {e}"),
+    let body = response.text().unwrap_or_default();
+
+    // Python: content = data["choices"][0]["message"]["content"], catching
+    // KeyError/IndexError/ValueError → "Unexpected response shape from …".
+    let data: Value = serde_json::from_str(&body).map_err(|e| ClientError {
+        message: unexpected_shape(&url, &body, &e.to_string()),
+        status_code: None,
+    })?;
+    let content = extract_content(&data).map_err(|exc| ClientError {
+        message: unexpected_shape(&url, &body, &exc),
         status_code: None,
     })?;
 
-    let choices = data.get("choices").ok_or_else(|| ClientError {
-        message: "Missing 'choices' key in response".to_string(),
-        status_code: None,
-    })?;
-
-    let choice = choices.get(0).ok_or_else(|| ClientError {
-        message: "Empty choices array in response".to_string(),
-        status_code: None,
-    })?;
-
-    let message = choice.get("message").ok_or_else(|| ClientError {
-        message: "Missing 'message' in choice".to_string(),
-        status_code: None,
-    })?;
-
-    let content = message
-        .get("content")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ClientError {
-            message: "Missing or non-string 'content' in message".to_string(),
-            status_code: None,
-        })?
-        .to_string();
-
-    if content.is_empty() {
+    // Python: `if not content or not content.strip()` — whitespace-only
+    // content counts as empty.
+    if content.trim().is_empty() {
         return Err(ClientError {
             message: format!("Model returned empty content (model={})", config.model),
             status_code: None,
@@ -122,6 +130,36 @@ pub fn call(messages: Vec<Value>, config: &ClientConfig) -> Result<String, Clien
     }
 
     Ok(content.trim().to_string())
+}
+
+/// `response.text[:200]` — Python slices characters.
+fn truncate_200(body: &str) -> String {
+    body.chars().take(200).collect()
+}
+
+fn unexpected_shape(url: &str, body: &str, exc: &str) -> String {
+    format!(
+        "Unexpected response shape from {url}: {exc}. Body: {}",
+        truncate_200(body)
+    )
+}
+
+/// Extract `choices[0].message.content`, reporting Python-exception-shaped
+/// error strings (`'choices'`, `list index out of range`, …).
+fn extract_content(data: &Value) -> Result<&str, String> {
+    let Some(choices) = data.get("choices") else {
+        return Err("'choices'".to_string());
+    };
+    let Some(choice) = choices.get(0) else {
+        return Err("list index out of range".to_string());
+    };
+    let Some(message) = choice.get("message") else {
+        return Err("'message'".to_string());
+    };
+    message
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "'content'".to_string())
 }
 
 pub fn config_from_task(task: &Task) -> ClientConfig {
