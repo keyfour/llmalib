@@ -130,26 +130,22 @@ fn test_parse_response_binding() {
         let out =
             api::parse_response(py, r#"{"label": "positive"}"#.into(), schema.bind(py)).unwrap();
         let d = out.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            true
-        );
+        assert!(d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
         assert!(d.get_item("error").unwrap().unwrap().is_none());
 
         let bad = api::parse_response(py, "no json".into(), schema.bind(py)).unwrap();
         let d = bad.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            false
-        );
+        assert!(!d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
     });
 }
 
@@ -275,14 +271,12 @@ fn test_run_with_retry_with_param_caller() {
         )
         .unwrap();
         let d = out.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            true
-        );
+        assert!(d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
         assert_eq!(
             d.get_item("attempts")
                 .unwrap()
@@ -310,14 +304,12 @@ fn test_global_caller_seam() {
         )
         .unwrap();
         let d = out.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            true
-        );
+        assert!(d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
         api::set_caller(None);
     });
 }
@@ -353,14 +345,12 @@ fn test_python_guard_drives_reflection() {
         )
         .unwrap();
         let d = out.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            true
-        );
+        assert!(d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
         assert_eq!(
             d.get_item("attempts")
                 .unwrap()
@@ -642,14 +632,12 @@ fn test_tracer_roundtrip_and_replay() {
         )
         .unwrap();
         let d = replayed.bind(py).downcast::<PyDict>().unwrap();
-        assert_eq!(
-            d.get_item("ok")
-                .unwrap()
-                .unwrap()
-                .extract::<bool>()
-                .unwrap(),
-            true
-        );
+        assert!(d
+            .get_item("ok")
+            .unwrap()
+            .unwrap()
+            .extract::<bool>()
+            .unwrap());
 
         let _ = std::fs::remove_file(&path);
     });

@@ -86,7 +86,10 @@ class TestPipeline:
 
     def test_python_router_stops_on_failure(self):
         _rust.set_caller(lambda m, c: "not json")
-        router = lambda result, remaining: remaining if result["ok"] else []
+
+        def router(result, remaining):
+            return remaining if result["ok"] else []
+
         out = _rust.run_pipeline(
             [make_spec(), make_spec(name="second")],
             vars={"text": "hello"},
