@@ -9,6 +9,7 @@ Both expose the same interface as before.
 
 from __future__ import annotations
 
+import builtins
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -39,8 +40,8 @@ class Store(Protocol):
     ) -> None: ...
     def get(self, key: str) -> StoreEntry | None: ...
     def delete(self, key: str) -> None: ...
-    def list(self, prefix: str = "") -> list[str]: ...
-    def get_relevant(self, query: str, top_k: int = 5) -> list[StoreEntry]: ...
+    def list(self, prefix: str = "") -> builtins.list[str]: ...
+    def get_relevant(self, query: str, top_k: int = 5) -> builtins.list[StoreEntry]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -71,10 +72,10 @@ class _RustBackedStore:
     def delete(self, key: str) -> None:
         self._inner.delete(key)
 
-    def list(self, prefix: str = "") -> list[str]:
+    def list(self, prefix: str = "") -> builtins.list[str]:
         return self._inner.list(prefix)
 
-    def get_relevant(self, query: str, top_k: int = 5) -> list[StoreEntry]:
+    def get_relevant(self, query: str, top_k: int = 5) -> builtins.list[StoreEntry]:
         return [_entry_from_dict(e) for e in self._inner.get_relevant(query, top_k)]
 
 
@@ -118,11 +119,7 @@ def _entry_from_dict(d: dict[str, Any]) -> StoreEntry:
     # Examples stored through .set() come back as their spec dicts —
     # reshape them into a pydantic instance when we can. The schema is not
     # known here, so the output stays a dict; select_examples re-hydrates.
-    if (
-        isinstance(value, dict)
-        and "input_text" in value
-        and "output" in value
-    ):
+    if isinstance(value, dict) and "input_text" in value and "output" in value:
         value = Example(
             input_text=value["input_text"],
             output=value.get("output", {}),

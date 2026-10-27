@@ -3,14 +3,22 @@ debug/tracer.py
 
 Always-on recorder for every LLM call in a pipeline run.
 Overhead is negligible (string copies). The debugging value is not.
+
+A thin wrapper over `llmalib._rust.PyTracer`: recording, summaries and
+to_dict/to_file/load_trace serialization run Rust-side under the same
+formats as the engine. `started_at` stays a Python monotonic float (it is
+the display clock for trace inspection; the persisted `started_at`,
+serialized by Rust, is an RFC3339 timestamp).
 """
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any
 
+from llmalib import _rust
+from llmalib._bridge import attempt_from_dict, task_result_to_dict
 from llmalib.core.result import Attempt, Result
 
 
@@ -19,65 +27,47 @@ class TaskTrace:
     task_name: str
     attempts: list[Attempt]
     ok: bool
-    final_value: dict | None
+    final_value: dict[str, Any] | None
     final_error: str | None
 
 
-@dataclass
 class Tracer:
-    run_id: str
-    task_traces: list[TaskTrace] = field(default_factory=list)
-    started_at: float = field(default_factory=time.monotonic)
+    """Wrapper around the Rust tracer; API unchanged (record/summary/to_dict/…)."""
+
+    def __init__(self, run_id: str) -> None:
+        self._inner = _rust.make_tracer(run_id)
+        # Python-side display clock for inspection (not persisted).
+        self.started_at: float = time.monotonic()
+
+    @property
+    def run_id(self) -> str:
+        return self._inner.run_id
+
+    @run_id.setter
+    def run_id(self, value: str) -> None:
+        self._inner.run_id = value
+
+    @property
+    def task_traces(self) -> list[TaskTrace]:
+        return [_hydrate_trace(d) for d in self._inner.task_traces]
 
     def record(self, result: Result) -> None:
         """Append a TaskTrace from a completed Result."""
-        self.task_traces.append(
-            TaskTrace(
-                task_name=result.task_name,
-                attempts=result.trace,
-                ok=result.ok,
-                final_value=result.value.model_dump() if result.value else None,
-                final_error=result.error,
+        value = result.value.model_dump() if result.value is not None else None
+        self._inner.record(
+            task_result_to_dict(
+                result.task_name, result.ok, value, result.error, result.trace
             )
         )
 
     def summary(self) -> str:
-        elapsed = f"{time.monotonic() - self.started_at:.1f}s"
-        parts = [f"run={self.run_id} | {elapsed} |"]
-        for tt in self.task_traces:
-            icon = "✓" if tt.ok else "✗"
-            parts.append(f"{tt.task_name} {icon}({len(tt.attempts)})")
-        return " ".join(parts)
+        return self._inner.summary()
 
-    def to_dict(self) -> dict:
-        return {
-            "run_id": self.run_id,
-            "started_at": self.started_at,
-            "tasks": [
-                {
-                    "task_name": tt.task_name,
-                    "ok": tt.ok,
-                    "final_value": tt.final_value,
-                    "final_error": tt.final_error,
-                    "attempts": [
-                        {
-                            "attempt_number": a.attempt_number,
-                            "rendered_prompt": a.rendered_prompt,
-                            "raw_response": a.raw_response,
-                            "parse_error": a.parse_error,
-                            "guard_errors": a.guard_errors,
-                            "duration_ms": a.duration_ms,
-                        }
-                        for a in tt.attempts
-                    ],
-                }
-                for tt in self.task_traces
-            ],
-        }
+    def to_dict(self) -> dict[str, Any]:
+        return self._inner.to_dict()
 
     def to_file(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+        self._inner.to_file(path)
 
 
 def make_tracer(run_id: str) -> Tracer:
@@ -86,31 +76,18 @@ def make_tracer(run_id: str) -> Tracer:
 
 def load_trace(path: str) -> Tracer:
     """Load a trace from a JSON file for inspection or replay."""
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    wrapped = Tracer.__new__(Tracer)
+    wrapped._inner = _rust.load_trace(path)
+    wrapped.started_at = time.monotonic()
+    return wrapped
 
-    tracer = Tracer(run_id=data["run_id"], started_at=data.get("started_at", 0))
 
-    for task_data in data.get("tasks", []):
-        attempts = [
-            Attempt(
-                attempt_number=a["attempt_number"],
-                rendered_prompt=a["rendered_prompt"],
-                raw_response=a["raw_response"],
-                parse_error=a.get("parse_error"),
-                guard_errors=a.get("guard_errors", []),
-                duration_ms=a.get("duration_ms", 0),
-            )
-            for a in task_data.get("attempts", [])
-        ]
-        tracer.task_traces.append(
-            TaskTrace(
-                task_name=task_data["task_name"],
-                attempts=attempts,
-                ok=task_data["ok"],
-                final_value=task_data.get("final_value"),
-                final_error=task_data.get("final_error"),
-            )
-        )
-
-    return tracer
+def _hydrate_trace(d: dict[str, Any]) -> TaskTrace:
+    """Rebuild a Python `TaskTrace` from the Rust tracer's dict."""
+    return TaskTrace(
+        task_name=d["task_name"],
+        attempts=[attempt_from_dict(a) for a in d["attempts"]],
+        ok=d["ok"],
+        final_value=d.get("final_value"),
+        final_error=d.get("final_error"),
+    )

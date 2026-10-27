@@ -63,7 +63,7 @@ def run_pipeline(
             vars=dict(ctx.vars),
             run_id=ctx.run_id,
             router=adapt_router(router, tasks) if router is not None else None,
-            store=store._inner if store is not None else None,
+            store=getattr(store, "_inner", None) if store is not None else None,
             debug=False,
         )
     except _rust.ClientError as exc:

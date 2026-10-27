@@ -19,7 +19,7 @@ engine runs Rust-side:
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from pydantic import BaseModel, create_model
 
@@ -71,7 +71,7 @@ def example_to_dict(ex: Example) -> dict[str, Any]:
 
 
 def adapt_guard(
-    guard: Callable, schema: type[BaseModel]
+    guard: Callable[[Any, Any], list[str]], schema: type[BaseModel]
 ) -> Callable[[dict[str, Any], ContextView], list[str]]:
     """
     Wrap a Python guard so the Rust bridge (which hands over a plain dict)
@@ -88,7 +88,7 @@ def adapt_guard(
     def adapted(
         value_dict: dict[str, Any],
         ctx: Any,
-        _guard: Callable = guard,
+        _guard: Callable[[Any, Any], list[str]] = guard,
         _schema: type[BaseModel] = schema,
     ) -> list[str]:
         return _guard(hydrate_value(value_dict, _schema), ctx)
@@ -151,7 +151,7 @@ def task_from_spec(spec: dict[str, Any]) -> Task:
     """Reconstruct a Task from a spec dict returned by `_rust`."""
     schema = json_schema_to_model(spec["output_schema"])
     guards = tuple(
-        guard._llmalib_original  # type: ignore[attr-defined]
+        guard._llmalib_original
         if getattr(guard, "_llmalib_original", None) is not None
         else guard
         for guard in (spec.get("guards") or [])
@@ -177,7 +177,10 @@ def task_from_spec(spec: dict[str, Any]) -> Task:
 def example_from_dict(d: dict[str, Any], schema: type[BaseModel]) -> Example:
     return Example(
         input_text=d["input_text"],
-        output=hydrate_value(d.get("output", {}), schema),
+        # Stored Example outputs are proper dicts; tolerate a missing key as
+        # before by defaulting to {} (untolerated non-dict values would fail
+        # validation downstream either way).
+        output=cast(BaseModel, hydrate_value(d.get("output", {}), schema)),
         description=d.get("description", ""),
     )
 
@@ -198,9 +201,7 @@ def value_to_dict(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def hydrate_value(
-    value: Any, schema: type[BaseModel]
-) -> BaseModel | None:
+def hydrate_value(value: Any, schema: type[BaseModel]) -> BaseModel | None:
     """Re-hydrate a parsed dict back into the task's pydantic model."""
     if value is None:
         return None
@@ -229,6 +230,37 @@ def result_from_dict(d: dict[str, Any], schema: type[BaseModel]) -> Result:
     )
 
 
+def task_result_to_dict(
+    task_name: str,
+    ok: bool,
+    value: Any,
+    error: str | None,
+    trace_attempts: list[Attempt],
+) -> dict[str, Any]:
+    """
+    Serialise a (task_name, ok, value, error, attempts) tuple into the
+    `TaskResult` dict shape `_rust` expects (tracer record / context merge).
+    """
+    return {
+        "task_name": task_name,
+        "ok": ok,
+        "value": value,
+        "error": error,
+        "attempts": len(trace_attempts),
+        "trace": [
+            {
+                "attempt_number": a.attempt_number,
+                "rendered_prompt": a.rendered_prompt,
+                "raw_response": a.raw_response,
+                "parse_error": a.parse_error,
+                "guard_errors": a.guard_errors,
+                "duration_ms": a.duration_ms,
+            }
+            for a in trace_attempts
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Context / config
 # ---------------------------------------------------------------------------
@@ -254,7 +286,7 @@ def config_to_dict(config: ClientConfig) -> dict[str, Any]:
 
 
 def adapt_router(
-    router: Callable, task_pool: list[Task]
+    router: Callable[[Result, list[Task]], list[Task]], task_pool: list[Task]
 ) -> Callable[[dict[str, Any], list[dict[str, Any]]], list[dict[str, Any]]]:
     """
     Wrap a Python router `(Result, list[Task]) -> list[Task]` for the Rust
@@ -277,9 +309,7 @@ def adapt_router(
     return adapted
 
 
-def _pool_schema(
-    result_dict: dict[str, Any], task_pool: list[Task]
-) -> type[BaseModel]:
+def _pool_schema(result_dict: dict[str, Any], task_pool: list[Task]) -> type[BaseModel]:
     name = result_dict.get("task_name")
     for t in task_pool:
         if t.name == name:
@@ -288,9 +318,7 @@ def _pool_schema(
     return json_schema_to_model({"type": "object", "properties": {}})
 
 
-def _tasks_from_specs(
-    specs: list[dict[str, Any]], task_pool: list[Task]
-) -> list[Task]:
+def _tasks_from_specs(specs: list[dict[str, Any]], task_pool: list[Task]) -> list[Task]:
     by_name: dict[str, Task] = {}
     for t in task_pool:
         by_name.setdefault(t.name, t)

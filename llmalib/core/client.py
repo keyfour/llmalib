@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from llmalib import _rust
 
@@ -31,7 +32,7 @@ class ClientConfig:
     max_tokens: int = 1024
 
 
-def call(messages: list[dict], config: ClientConfig) -> str:
+def call(messages: list[dict[str, Any]], config: ClientConfig) -> str:
     """
     POST to /v1/chat/completions and return the content string of the first choice.
 
@@ -59,7 +60,7 @@ def call(messages: list[dict], config: ClientConfig) -> str:
         raise ClientError(message) from None
 
 
-def config_from_task(task) -> ClientConfig:
+def config_from_task(task: Any) -> ClientConfig:
     """Build a ClientConfig from a Task's fields."""
     return ClientConfig(
         base_url=task.base_url,

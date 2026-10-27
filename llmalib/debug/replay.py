@@ -12,10 +12,12 @@ into a Rust tracer, and lets `llmalib._rust.replay_task` do the engine work
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 from llmalib import _rust
-from llmalib._bridge import result_from_dict, spec_from_task
+from llmalib._bridge import result_from_dict, spec_from_task, task_result_to_dict
 from llmalib.core.client import ClientError
 from llmalib.core.result import Result
 from llmalib.core.task import Task
@@ -79,23 +81,8 @@ def replay_task(
     return result_from_dict(out, schema)
 
 
-def _trace_to_result_dict(trace: TaskTrace) -> dict:
+def _trace_to_result_dict(trace: TaskTrace) -> dict[str, Any]:
     """Serialise a TaskTrace into the TaskResult shape `_rust` expects."""
-    return {
-        "task_name": trace.task_name,
-        "ok": trace.ok,
-        "value": trace.final_value,
-        "error": trace.final_error,
-        "attempts": len(trace.attempts),
-        "trace": [
-            {
-                "attempt_number": a.attempt_number,
-                "rendered_prompt": a.rendered_prompt,
-                "raw_response": a.raw_response,
-                "parse_error": a.parse_error,
-                "guard_errors": a.guard_errors,
-                "duration_ms": a.duration_ms,
-            }
-            for a in trace.attempts
-        ],
-    }
+    return task_result_to_dict(
+        trace.task_name, trace.ok, trace.final_value, trace.final_error, trace.attempts
+    )

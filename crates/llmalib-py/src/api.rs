@@ -32,8 +32,8 @@ use crate::classes::{
     load_trace, make_file_store, make_memory_store, make_tracer, PyStore, PyTracer,
 };
 use crate::convert::{
-    config_from_py, context_from_py, py_to_value, result_to_py, spec_to_task, task_to_spec,
-    value_to_py,
+    any_to_value, config_from_py, context_from_py, py_to_value, result_to_py, spec_to_task,
+    task_to_spec, value_to_py,
 };
 use llmalib_memory::store::Store;
 
@@ -593,6 +593,170 @@ pub fn set_caller(f: Option<Py<PyAny>>) {
 }
 
 // ---------------------------------------------------------------------------
+// native guards (rule logic lives in llmalib-reliability)
+// ---------------------------------------------------------------------------
+
+use llmalib_core::context::Context as CoreContext;
+use llmalib_core::guard::Guard as CoreGuard;
+use llmalib_reliability::guard::{
+    field_in_set as rust_field_in_set, float_in_range as rust_float_in_range,
+    max_length as rust_max_length, no_content_from_outside_context as rust_no_content, py_str,
+};
+
+/// Python callable handle around a Rust `dyn Guard`.
+///
+/// The `llmalib.reliability.guards` factory functions return these: they are
+/// plain `(value, ctx) -> list[str]` callables, but the rule logic runs in
+/// Rust. Through the pipeline the guard bridges call `__call__` with a plain
+/// dict; direct Python calls pass pydantic instances — both are accepted.
+#[pyclass]
+pub struct NativeGuard {
+    inner: std::sync::Arc<dyn CoreGuard>,
+}
+
+#[pymethods]
+impl NativeGuard {
+    #[pyo3(signature = (value, ctx=None))]
+    fn __call__(
+        &self,
+        py: Python<'_>,
+        value: &Bound<'_, PyAny>,
+        ctx: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<String>> {
+        let data = any_to_value(py, value)?;
+        let core_ctx = core_ctx_from_py(py, ctx)?;
+        Ok(self.inner.validate(&data, &core_ctx))
+    }
+}
+
+/// Build the Rust `Context` a native guard rule needs from the Python-side
+/// context argument: `Context`/`ContextView` (`.vars`), a plain dict
+/// (looked up directly, like the original guards) or `None`.
+fn core_ctx_from_py(py: Python<'_>, ctx: Option<&Bound<'_, PyAny>>) -> PyResult<CoreContext> {
+    let mut core = CoreContext::with_run_id("");
+    if let Some(c) = ctx {
+        let vars_value = if let Ok(vars_obj) = c.getattr("vars") {
+            if vars_obj.is_none() {
+                serde_json::Value::Object(Default::default())
+            } else {
+                any_to_value(py, &vars_obj)?
+            }
+        } else if c.is_instance_of::<PyDict>() {
+            any_to_value(py, c)?
+        } else {
+            serde_json::Value::Object(Default::default())
+        };
+        if let serde_json::Value::Object(map) = vars_value {
+            core.vars = map;
+        }
+    }
+    Ok(core)
+}
+
+/// `llmalib.reliability.guards.field_in_set(field, allowed)` — Rust rule.
+#[pyfunction]
+pub fn guard_field_in_set(field: String, allowed: Vec<String>) -> NativeGuard {
+    NativeGuard {
+        inner: rust_field_in_set(&field, &allowed),
+    }
+}
+
+/// `llmalib.reliability.guards.float_in_range(field, min_val, max_val)`.
+#[pyfunction]
+pub fn guard_float_in_range(field: String, min_val: f64, max_val: f64) -> NativeGuard {
+    NativeGuard {
+        inner: rust_float_in_range(&field, min_val, max_val),
+    }
+}
+
+/// `llmalib.reliability.guards.max_length(field, max_chars)`.
+#[pyfunction]
+pub fn guard_max_length(field: String, max_chars: usize) -> NativeGuard {
+    NativeGuard {
+        inner: rust_max_length(&field, max_chars),
+    }
+}
+
+/// `llmalib.reliability.guards.no_content_from_outside_context(...)`.
+#[pyfunction]
+pub fn guard_no_content_from_outside_context(
+    response_field: String,
+    context_field: String,
+    threshold: f64,
+) -> NativeGuard {
+    NativeGuard {
+        inner: rust_no_content(&response_field, &context_field, threshold),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// router decisions (decisions are rules; task-list plumbing stays Python)
+// ---------------------------------------------------------------------------
+
+/// `router.stop_on_failure` decision: continue after this result?
+#[pyfunction]
+pub fn route_stop_on_failure(ok: bool) -> bool {
+    ok
+}
+
+/// `router.branch_on_field` decision given an already-extracted field value:
+/// returns the matching branch key (Python-str coerced) or `None` for
+/// "pipeline unchanged".
+#[pyfunction]
+#[pyo3(signature = (field, ok, value, branch_keys))]
+pub fn route_branch_key<'py>(
+    py: Python<'py>,
+    field: String,
+    ok: bool,
+    value: Option<&Bound<'py, PyAny>>,
+    branch_keys: Vec<String>,
+) -> PyResult<Option<String>> {
+    if !ok {
+        return Ok(None);
+    }
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    let data = any_to_value(py, value)?;
+    let Some(field_value) = data.get(&field) else {
+        return Ok(None);
+    };
+    if field_value.is_null() {
+        return Ok(None);
+    }
+    // Python's `str(value)` branch lookup.
+    let key = py_str(field_value);
+    Ok(if branch_keys.contains(&key) {
+        Some(key)
+    } else {
+        None
+    })
+}
+
+/// `context.update_context` field merge: copy `value`'s fields over `vars`
+/// (last-write-wins, exactly like Python's `dict.update`).
+#[pyfunction]
+pub fn merge_value_fields<'py>(
+    py: Python<'py>,
+    vars: &Bound<'py, PyDict>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<PyObject> {
+    let mut merged = match py_to_value(py, vars.as_any())? {
+        serde_json::Value::Object(m) => m,
+        _ => serde_json::Map::new(),
+    };
+    if !value.is_none() {
+        if let serde_json::Value::Object(extra) = any_to_value(py, value)? {
+            merged.extend(extra);
+        }
+    }
+    value_to_py(py, &serde_json::Value::Object(merged))
+}
+
+// ---------------------------------------------------------------------------
 // registration
 // ---------------------------------------------------------------------------
 
@@ -619,8 +783,16 @@ pub fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(make_file_store, m)?)?;
     m.add_function(wrap_pyfunction!(make_tracer, m)?)?;
     m.add_function(wrap_pyfunction!(load_trace, m)?)?;
+    m.add_function(wrap_pyfunction!(guard_field_in_set, m)?)?;
+    m.add_function(wrap_pyfunction!(guard_float_in_range, m)?)?;
+    m.add_function(wrap_pyfunction!(guard_max_length, m)?)?;
+    m.add_function(wrap_pyfunction!(guard_no_content_from_outside_context, m)?)?;
+    m.add_function(wrap_pyfunction!(route_stop_on_failure, m)?)?;
+    m.add_function(wrap_pyfunction!(route_branch_key, m)?)?;
+    m.add_function(wrap_pyfunction!(merge_value_fields, m)?)?;
     m.add_class::<PyStore>()?;
     m.add_class::<PyTracer>()?;
+    m.add_class::<NativeGuard>()?;
     m.add_class::<crate::classes::ContextView>()?;
     m.add("StoreError", py.get_type::<crate::classes::StoreError_>())?;
     m.add("ClientError", py.get_type::<crate::ClientError>())?;

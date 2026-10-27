@@ -20,7 +20,9 @@ from typing import Any, Callable
 from llmalib._rust import set_caller
 
 
-def sequence_caller(*responses: str) -> Callable[[list, dict], str]:
+def sequence_caller(
+    *responses: str,
+) -> Callable[[list[dict[str, Any]], dict[str, Any]], str]:
     """
     Caller that hands out the given responses in order, one per call.
     The final response is repeated once the sequence is exhausted — this
@@ -31,7 +33,7 @@ def sequence_caller(*responses: str) -> Callable[[list, dict], str]:
     if not seq:
         raise ValueError("sequence_caller needs at least one response")
 
-    def caller(messages: list, config: dict) -> str:
+    def caller(messages: list[dict[str, Any]], config: dict[str, Any]) -> str:
         if len(seq) > 1:
             return seq.pop(0)
         return seq[0]
@@ -39,10 +41,12 @@ def sequence_caller(*responses: str) -> Callable[[list, dict], str]:
     return caller
 
 
-def raising_caller(exception: BaseException) -> Callable[[list, dict], str]:
+def raising_caller(
+    exception: BaseException,
+) -> Callable[[list[dict[str, Any]], dict[str, Any]], str]:
     """Caller that raises the given exception on every call."""
 
-    def caller(messages: list, config: dict) -> str:
+    def caller(messages: list[dict[str, Any]], config: dict[str, Any]) -> str:
         raise exception
 
     return caller
@@ -50,13 +54,13 @@ def raising_caller(exception: BaseException) -> Callable[[list, dict], str]:
 
 def inspecting_caller(
     response: str, recorder: dict[str, Any]
-) -> Callable[[list, dict], str]:
+) -> Callable[[list[dict[str, Any]], dict[str, Any]], str]:
     """
     Caller that always returns `response` while recording the last
     call's messages and config into `recorder`.
     """
 
-    def caller(messages: list, config: dict) -> str:
+    def caller(messages: list[dict[str, Any]], config: dict[str, Any]) -> str:
         recorder["messages"] = messages
         recorder["config"] = config
         return response

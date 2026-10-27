@@ -12,7 +12,7 @@ minimum (system + final user turn) already exceeds the budget.
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from llmalib import _rust
 
@@ -31,10 +31,10 @@ def count_tokens(text: str, tokenizer: Callable[[str], int] | None = None) -> in
 
 
 def trim_to_budget(
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     budget: int,
     tokenizer: Callable[[str], int] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Return a (possibly trimmed) copy of messages that fits within budget tokens.
 

@@ -5,6 +5,7 @@ Type stubs for the `llmalib._rust` pyo3 extension module so mypy sees the
 flat FFI surface the Python adapters call into.
 """
 
+import builtins
 from typing import Any, Callable
 
 CallerFn = Callable[[list[dict[str, Any]], dict[str, Any]], str]
@@ -19,20 +20,15 @@ def build_reflection_message(
     parse_error: str | None = ...,
     guard_errors: list[str] | None = ...,
 ) -> dict[str, Any]: ...
-
-def count_tokens(
-    text: str, tokenizer: TokenizerFn | None = ...
-) -> int: ...
+def count_tokens(text: str, tokenizer: TokenizerFn | None = ...) -> int: ...
 def trim_to_budget(
     messages: list[dict[str, Any]],
     budget: int,
     tokenizer: TokenizerFn | None = ...,
 ) -> list[dict[str, Any]]: ...  # raises BudgetExceededError
 def keep_first_and_last_sentence(text: str) -> str: ...
-
 def tokenize(text: str) -> list[str]: ...
 def bm25_rank(query: str, entries: list[Any], top_k: int) -> list[Any]: ...
-
 def select_examples(
     task_spec: dict[str, Any],
     vars: dict[str, Any],
@@ -40,9 +36,9 @@ def select_examples(
     max_examples: int = ...,
 ) -> list[dict[str, Any]]: ...
 def format_examples_block(examples: list[dict[str, Any]]) -> str: ...
-
-def call(messages: list[dict[str, Any]], config: dict[str, Any]) -> str: ...  # raises ClientError
-
+def call(
+    messages: list[dict[str, Any]], config: dict[str, Any]
+) -> str: ...  # raises ClientError
 def run_with_retry(
     task_spec: dict[str, Any],
     messages: list[dict[str, Any]],
@@ -50,7 +46,6 @@ def run_with_retry(
     ctx: dict[str, Any] | None = ...,
     caller: CallerFn | None = ...,
 ) -> dict[str, Any]: ...  # raises ClientError
-
 def run_pipeline(
     task_specs: list[dict[str, Any]],
     vars: dict[str, Any] | None = ...,
@@ -61,7 +56,6 @@ def run_pipeline(
     caller: CallerFn | None = ...,
     debug: bool = ...,
 ) -> dict[str, Any]: ...  # raises ClientError, BudgetExceededError
-
 def decompose(
     prompt: str,
     registry: dict[str, dict[str, Any]],
@@ -69,7 +63,6 @@ def decompose(
     max_tasks: int = ...,
     caller: CallerFn | None = ...,
 ) -> list[dict[str, Any]]: ...  # raises DecompositionError, ClientError
-
 def replay_task(
     tracer: PyTracer,
     task_name: str,
@@ -82,8 +75,23 @@ def replay_task(
     diff: bool = ...,
     caller: CallerFn | None = ...,
 ) -> dict[str, Any]: ...  # raises RuntimeError
-
 def set_caller(f: CallerFn | None = ...) -> None: ...
+
+# native guards / router decisions / context merge ---------------------------
+def guard_field_in_set(field: str, allowed: list[str]) -> NativeGuard: ...
+def guard_float_in_range(field: str, min_val: float, max_val: float) -> NativeGuard: ...
+def guard_max_length(field: str, max_chars: int) -> NativeGuard: ...
+def guard_no_content_from_outside_context(
+    response_field: str, context_field: str, threshold: float
+) -> NativeGuard: ...
+def route_stop_on_failure(ok: bool) -> bool: ...
+def route_branch_key(
+    field: str, ok: bool, value: Any, branch_keys: list[str]
+) -> str | None: ...
+def merge_value_fields(vars: dict[str, Any], value: Any) -> dict[str, Any]: ...
+
+class NativeGuard:
+    def __call__(self, value: Any, ctx: Any = ...) -> list[str]: ...
 
 def make_memory_store() -> PyStore: ...
 def make_file_store(path: str) -> PyStore: ...  # raises StoreError
@@ -100,8 +108,8 @@ class PyStore:
     ) -> None: ...
     def get(self, key: str) -> dict[str, Any] | None: ...
     def delete(self, key: str) -> None: ...
-    def list(self, prefix: str) -> list[str]: ...
-    def get_relevant(self, query: str, top_k: int) -> list[dict[str, Any]]: ...
+    def list(self, prefix: str) -> builtins.list[str]: ...
+    def get_relevant(self, query: str, top_k: int) -> builtins.list[dict[str, Any]]: ...
 
 class PyTracer:
     run_id: str

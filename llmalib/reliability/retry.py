@@ -10,6 +10,8 @@ Every attempt is recorded in the returned Result regardless of outcome.
 
 from __future__ import annotations
 
+from typing import Any
+
 from llmalib import _rust
 from llmalib._bridge import (
     config_to_dict,
@@ -18,15 +20,16 @@ from llmalib._bridge import (
     spec_from_task,
 )
 from llmalib.core.client import ClientConfig, ClientError
+from llmalib.core.context import Context
 from llmalib.core.result import Result
 from llmalib.core.task import Task
 
 
 def run_with_retry(
     task: Task,
-    messages: list[dict],
+    messages: list[dict[str, Any]],
     config: ClientConfig,
-    ctx=None,  # Context — passed to guards; optional to avoid circular import
+    ctx: Context | None = None,  # passed to guards; optional to avoid circular import
 ) -> Result:
     """
     Execute task with reflection-based retry on validation or guard failure.
@@ -49,7 +52,7 @@ def run_with_retry(
 def build_reflection_message(
     parse_error: str | None,
     guard_errors: list[str],
-) -> dict:
+) -> dict[str, Any]:
     """
     Build the user-turn message that feeds failure details back to the model.
 

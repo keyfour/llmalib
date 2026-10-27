@@ -39,9 +39,7 @@ def parse_response(raw: str, schema: type[BaseModel]) -> ParseResult:
     out = _rust.parse_response(raw, schema_to_json(schema))
     if not out["ok"]:
         return ParseResult(ok=False, value=None, error=out["error"])
-    return ParseResult(
-        ok=True, value=hydrate_value(out["value"], schema), error=None
-    )
+    return ParseResult(ok=True, value=hydrate_value(out["value"], schema), error=None)
 
 
 def _extract_json(raw: str) -> str | None:
@@ -56,12 +54,8 @@ def format_schema_hint(schema: type[BaseModel]) -> str:
 
     Example output:
       {"label": "<str>", "confidence": "<float>", "reason": "<str>"}
-    """
-    import json
 
-    hints: dict[str, str] = {}
-    for name, field_info in schema.model_fields.items():
-        annotation = field_info.annotation
-        type_name = getattr(annotation, "__name__", str(annotation))
-        hints[name] = f"<{type_name}>"
-    return json.dumps(hints)
+    Delegates to the Rust rule operating on the JSON Schema (the same path the
+    engine uses for system prompts), so direct calls match engine hints.
+    """
+    return _rust.format_schema_hint(schema_to_json(schema))

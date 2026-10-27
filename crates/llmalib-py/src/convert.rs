@@ -52,6 +52,17 @@ pub fn py_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         .map_err(|e| PyErr::new::<PyTypeError, _>(format!("object not JSON-compatible: {e}")))
 }
 
+/// Python object → `serde_json::Value`, tolerant of pydantic models: `json`
+/// cannot serialize `BaseModel` instances directly, so those are dumped first.
+pub fn any_to_value(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Value> {
+    if obj.hasattr("model_dump")? {
+        let dumped = obj.call_method0("model_dump")?;
+        py_to_value(py, &dumped)
+    } else {
+        py_to_value(py, obj)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Task specs
 // ---------------------------------------------------------------------------

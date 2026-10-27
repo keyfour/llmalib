@@ -213,6 +213,12 @@ impl PyTracer {
         &self.inner.run_id
     }
 
+    /// Pipeline adapters defensively reassign `tracer.run_id` after a run.
+    #[setter]
+    pub fn set_run_id(&mut self, run_id: String) {
+        self.inner.run_id = run_id;
+    }
+
     #[getter]
     pub fn task_traces(&self, py: Python<'_>) -> PyResult<PyObject> {
         value_to_py(

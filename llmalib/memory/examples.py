@@ -10,6 +10,7 @@ Examples are placed at the end of the system prompt for maximum recency effect.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from llmalib import _rust
 from llmalib._bridge import spec_from_task
@@ -25,7 +26,7 @@ class FormattedExample:
 
 def select_examples(
     task: Task,
-    ctx_vars: dict,
+    ctx_vars: dict[str, Any],
     store: Store | None = None,
     max_examples: int = 4,
 ) -> list[FormattedExample]:
@@ -38,7 +39,8 @@ def select_examples(
 
     Most relevant example is placed last (recency bias per research).
     """
-    inner = store._inner if store is not None else None
+    # Protocol-typed store: the Rust-backed attribute is looked up defensively.
+    inner = getattr(store, "_inner", None) if store is not None else None
     out = _rust.select_examples(spec_from_task(task), ctx_vars, inner, max_examples)
     return [FormattedExample(text=d["text"], source=d["source"]) for d in out]
 
