@@ -3,22 +3,22 @@ tests/core/test_core.py
 Tests for result, context, task, and client modules.
 """
 
-import pytest
+import http.server
+import json
+import threading
 import time
-from unittest.mock import MagicMock, patch
+
+import pytest
 from pydantic import BaseModel
 
-from llmalib.core.result import (
-    Attempt,
-    Result,
-    make_ok_result,
-    make_error_result,
-    make_attempt,
-)
-from llmalib.core.context import Context, make_context, update_context, get_result
-from llmalib.core.task import Task
 from llmalib.core.client import ClientConfig, ClientError, call
-
+from llmalib.core.context import get_result, make_context, update_context
+from llmalib.core.result import (
+    make_attempt,
+    make_error_result,
+    make_ok_result,
+)
+from llmalib.core.task import Task
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -31,11 +31,11 @@ class SentimentResult(BaseModel):
 
 
 def make_sample_task(**overrides) -> Task:
-    defaults = dict(
-        name="test_task",
-        prompt_template="Classify: {{ text }}",
-        output_schema=SentimentResult,
-    )
+    defaults = {
+        "name": "test_task",
+        "prompt_template": "Classify: {{ text }}",
+        "output_schema": SentimentResult,
+    }
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -154,80 +154,97 @@ class TestTask:
 
 
 # ---------------------------------------------------------------------------
-# client.py
+# client.py — exercised against a real local HTTP server (reqwest transport)
 # ---------------------------------------------------------------------------
 
 
+class _ChatHandler(http.server.BaseHTTPRequestHandler):
+    """Canned /v1/chat/completions responses driven by server.mode."""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        self.server.captured["path"] = self.path
+
+        mode = self.server.mode
+        if mode == "slow":
+            time.sleep(1.0)
+
+        if mode == "http500":
+            status, body = 500, b"Internal Server Error"
+        elif mode == "empty":
+            status = 200
+            body = json.dumps(
+                {"choices": [{"message": {"content": "   "}}]}
+            ).encode()
+        elif mode == "missing_choices":
+            status, body = 200, json.dumps({"choices": []}).encode()
+        else:  # "ok" and "slow"
+            status = 200
+            body = json.dumps(
+                {"choices": [{"message": {"content": "hello world"}}]}
+            ).encode()
+
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def model_server():
+    servers: list[http.server.HTTPServer] = []
+
+    def make(mode: str):
+        srv = http.server.HTTPServer(("127.0.0.1", 0), _ChatHandler)
+        srv.mode = mode
+        srv.captured = {}
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        servers.append(srv)
+        base_url = f"http://127.0.0.1:{srv.server_port}/v1"
+        return srv, base_url
+
+    yield make
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+
+
 class TestClient:
-    def test_call_success(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "hello world"}}]
-        }
-
-        config = ClientConfig()
-        with patch("httpx.post", return_value=mock_response):
-            result = call([{"role": "user", "content": "hi"}], config)
-
+    def test_call_success(self, model_server):
+        _srv, base_url = model_server("ok")
+        result = call([{"role": "user", "content": "hi"}], ClientConfig(base_url=base_url))
         assert result == "hello world"
 
-    def test_call_http_error(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-
-        config = ClientConfig()
-        with patch("httpx.post", return_value=mock_response):
-            with pytest.raises(ClientError) as exc_info:
-                call([{"role": "user", "content": "hi"}], config)
-
+    def test_call_http_error(self, model_server):
+        _srv, base_url = model_server("http500")
+        with pytest.raises(ClientError) as exc_info:
+            call([{"role": "user", "content": "hi"}], ClientConfig(base_url=base_url))
         assert "500" in str(exc_info.value)
+        assert exc_info.value.status_code == 500
 
-    def test_call_empty_content(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"choices": [{"message": {"content": "   "}}]}
+    def test_call_empty_content(self, model_server):
+        _srv, base_url = model_server("empty")
+        with pytest.raises(ClientError, match="empty content"):
+            call([{"role": "user", "content": "hi"}], ClientConfig(base_url=base_url))
 
-        config = ClientConfig()
-        with patch("httpx.post", return_value=mock_response):
-            with pytest.raises(ClientError, match="empty content"):
-                call([{"role": "user", "content": "hi"}], config)
-
-    def test_call_timeout(self):
-        import httpx as _httpx
-
-        config = ClientConfig(timeout=1.0)
-        with patch("httpx.post", side_effect=_httpx.TimeoutException("timed out")):
-            with pytest.raises(ClientError, match="timed out"):
-                call([{"role": "user", "content": "hi"}], config)
-
-    def test_call_missing_choices(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"choices": []}
-        mock_response.text = "{}"
-
-        config = ClientConfig()
-        with patch("httpx.post", return_value=mock_response):
-            with pytest.raises(ClientError):
-                call([{"role": "user", "content": "hi"}], config)
-
-    def test_url_construction(self):
-        """Ensure trailing slash on base_url is handled."""
-        captured = {}
-
-        def fake_post(url, **kwargs):
-            captured["url"] = url
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "choices": [{"message": {"content": "ok"}}]
-            }
-            return mock_response
-
-        config = ClientConfig(base_url="http://localhost:11434/v1/")
-        with patch("httpx.post", side_effect=fake_post):
+    def test_call_timeout(self, model_server):
+        _srv, base_url = model_server("slow")
+        config = ClientConfig(base_url=base_url, timeout=0.2)
+        with pytest.raises(ClientError, match="timed out"):
             call([{"role": "user", "content": "hi"}], config)
 
-        assert captured["url"] == "http://localhost:11434/v1/chat/completions"
+    def test_call_missing_choices(self, model_server):
+        _srv, base_url = model_server("missing_choices")
+        with pytest.raises(ClientError, match="Unexpected response shape"):
+            call([{"role": "user", "content": "hi"}], ClientConfig(base_url=base_url))
+
+    def test_url_construction(self, model_server):
+        """Ensure trailing slash on base_url is handled; posts to /chat/completions."""
+        srv, base_url = model_server("ok")
+        call([{"role": "user", "content": "hi"}], ClientConfig(base_url=base_url))
+        assert srv.captured["path"] == "/v1/chat/completions"

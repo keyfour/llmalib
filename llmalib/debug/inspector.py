@@ -9,20 +9,22 @@ All output goes to stderr — never pollutes stdout.
 from __future__ import annotations
 
 import sys
+
 from llmalib.core.result import Attempt, Result
 from llmalib.debug.tracer import Tracer
 
 # Try to import rich; fall back to plain text
+_console: Console | None = None
+_RICH = False
 try:
     from rich.console import Console
-    from rich.text import Text
     from rich.rule import Rule
+    from rich.text import Text
 
     _console = Console(stderr=True, highlight=False)
     _RICH = True
 except ImportError:
-    _RICH = False
-    _console = None
+    pass
 
 
 def print_result(result: Result) -> None:
@@ -30,7 +32,7 @@ def print_result(result: Result) -> None:
     icon = "✓" if result.ok else "✗"
     attempts_str = f"[attempt {result.attempts}/{result.attempts}]"
 
-    if _RICH:
+    if _RICH and _console is not None:
         color = "green" if result.ok else "red"
         line = Text()
         line.append(f"{icon}  {result.task_name:<30}", style=f"bold {color}")
@@ -57,11 +59,6 @@ def print_trace(tracer: Tracer) -> None:
     """Print a full run summary after all tasks complete."""
     total = len(tracer.task_traces)
     succeeded = sum(1 for t in tracer.task_traces if t.ok)
-    elapsed = (
-        f"{tracer.task_traces[-1].attempts[-1].duration_ms / 1000:.1f}s"
-        if tracer.task_traces
-        else "0s"
-    )
 
     _rule(f"Pipeline Run: {tracer.run_id}")
     _print(f" Tasks: {total}  |  Success: {succeeded}  |  Failed: {total - succeeded}")
@@ -118,7 +115,7 @@ def print_attempt(attempt: Attempt) -> None:
 
 
 def _print(text: str, dim: bool = False) -> None:
-    if _RICH:
+    if _RICH and _console is not None:
         style = "dim" if dim else ""
         _console.print(text, style=style)
     else:
@@ -126,7 +123,7 @@ def _print(text: str, dim: bool = False) -> None:
 
 
 def _rule(title: str = "") -> None:
-    if _RICH:
+    if _RICH and _console is not None:
         _console.print(Rule(title))
     else:
         line = f"─── {title} " if title else "─" * 60

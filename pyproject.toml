@@ -1,11 +1,16 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "."
+module-name = "llmalib._rust"
+manifest-path = "crates/llmalib-py/Cargo.toml"
 
 [project]
 name = "llmalib"
 version = "0.1.0"
-description = "A minimal, transparent Python library for building agentic pipelines with local small language models"
+description = "A minimal, transparent agentic-pipeline library built on a small-model research core — Python API and types over a Rust engine (pyo3)"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Aleksandr Karpov <alex.karpov@keyfour.tech>" }]
@@ -18,12 +23,11 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Rust",
 ]
 requires-python = ">=3.9"
 dependencies = [
   "pydantic>=2.0",
-  "httpx>=0.25.0",
-  "jinja2>=3.1.0",
   "rich>=13.0.0",
 ]
 
@@ -34,9 +38,6 @@ dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "ruff>=0.4.0", "mypy>=1.0.0"]
 Homepage = "https://github.com/keyfour/llmalib"
 Repository = "https://github.com/keyfour/llmalib"
 Documentation = "https://llmalib.github.io"
-
-[tool.hatch.build.targets.wheel]
-packages = ["llmalib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

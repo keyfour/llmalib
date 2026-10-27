@@ -4,20 +4,24 @@ debug/replay.py
 Replay a specific recorded task attempt against a different model or prompt.
 Primary tool for iterating on prompts and schema design without re-running
 the full pipeline.
+
+The Python layer validates the trace select, mirrors the recorded attempts
+into a Rust tracer, and lets `llmalib._rust.replay_task` do the engine work
+(call + parse + guards, optional diff output to stderr).
 """
 
 from __future__ import annotations
 
-import json
-import sys
+from typing import Any
+
 from pydantic import BaseModel
 
-from llmalib.core.client import ClientConfig, call
-from llmalib.core.result import Result, make_attempt, make_error_result, make_ok_result
+from llmalib import _rust
+from llmalib._bridge import result_from_dict, spec_from_task, task_result_to_dict
+from llmalib.core.client import ClientError
+from llmalib.core.result import Result
 from llmalib.core.task import Task
-from llmalib.debug.tracer import Tracer
-from llmalib.reliability.validator import parse_response
-import time
+from llmalib.debug.tracer import TaskTrace, Tracer
 
 
 def replay_task(
@@ -39,7 +43,7 @@ def replay_task(
 
     diff=True prints a side-by-side comparison of original vs new response.
     """
-    # Find the task trace
+    # --- trace selection (same error messages as before) ---
     tt = next((t for t in tracer.task_traces if t.task_name == task_name), None)
     if tt is None:
         available = [t.task_name for t in tracer.task_traces]
@@ -53,82 +57,32 @@ def replay_task(
             f"got {attempt_number}"
         )
 
-    original_attempt = tt.attempts[attempt_number - 1]
-
-    # Reconstruct messages from the rendered prompt
-    try:
-        messages: list[dict] = json.loads(original_attempt.rendered_prompt)
-    except json.JSONDecodeError:
-        # Fallback: wrap as a single user message if not valid JSON
-        messages = [{"role": "user", "content": original_attempt.rendered_prompt}]
-
-    # Apply prompt override to the final user turn
-    if prompt_override is not None:
-        messages = list(messages)
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i]["role"] == "user":
-                messages[i] = dict(messages[i], content=prompt_override)
-                break
+    # --- mirror the recorded attempts into the Rust tracer ---
+    rust_tracer = _rust.make_tracer(tracer.run_id)
+    for trace in tracer.task_traces:
+        rust_tracer.record(_trace_to_result_dict(trace))
 
     schema = schema_override or task.output_schema
-    config = ClientConfig(
-        base_url=base_url or task.base_url,
-        model=model or task.model,
-        temperature=task.temperature,
-        timeout=task.timeout,
-        max_tokens=task.max_tokens,
+    try:
+        out = _rust.replay_task(
+            rust_tracer,
+            task_name,
+            spec_from_task(task),
+            attempt_number,
+            model,
+            base_url,
+            prompt_override,
+            schema.model_json_schema() if schema_override is not None else None,
+            diff,
+        )
+    except _rust.ClientError as exc:
+        raise ClientError(str(exc)) from None
+
+    return result_from_dict(out, schema)
+
+
+def _trace_to_result_dict(trace: TaskTrace) -> dict[str, Any]:
+    """Serialise a TaskTrace into the TaskResult shape `_rust` expects."""
+    return task_result_to_dict(
+        trace.task_name, trace.ok, trace.final_value, trace.final_error, trace.attempts
     )
-
-    started_at = time.monotonic()
-    raw = call(messages, config)
-    parse_result = parse_response(raw, schema)
-
-    guard_errors: list[str] = []
-    if parse_result.ok and task.guards:
-        for guard in task.guards:
-            guard_errors.extend(guard(parse_result.value, None))
-
-    attempt = make_attempt(
-        attempt_number=1,
-        rendered_prompt=json.dumps(messages, indent=2),
-        raw_response=raw,
-        parse_error=parse_result.error,
-        guard_errors=guard_errors,
-        started_at=started_at,
-    )
-
-    if diff:
-        _print_diff(original_attempt.raw_response, raw, attempt_number)
-
-    if parse_result.ok and not guard_errors:
-        return make_ok_result(task_name, parse_result.value, [attempt])
-    else:
-        errors = []
-        if parse_result.error:
-            errors.append(parse_result.error)
-        errors.extend(guard_errors)
-        return make_error_result(task_name, " | ".join(errors), [attempt])
-
-
-def _print_diff(original: str, replayed: str, attempt_number: int) -> None:
-    sep = "─" * 60
-    print(f"\n{sep}", file=sys.stderr)
-    print(f"── Original (attempt {attempt_number})", file=sys.stderr)
-    print(original[:500], file=sys.stderr)
-    print(f"\n── Replay", file=sys.stderr)
-    print(replayed[:500], file=sys.stderr)
-
-    # Simple line-level diff
-    orig_lines = original.splitlines()
-    new_lines = replayed.splitlines()
-    if orig_lines != new_lines:
-        print(f"\n── Diff", file=sys.stderr)
-        for line in orig_lines:
-            if line not in new_lines:
-                print(f"- {line}", file=sys.stderr)
-        for line in new_lines:
-            if line not in orig_lines:
-                print(f"+ {line}", file=sys.stderr)
-    else:
-        print("\n── Diff: (no change)", file=sys.stderr)
-    print(sep, file=sys.stderr)

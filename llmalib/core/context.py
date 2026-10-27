@@ -12,6 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from llmalib import _rust
 from llmalib.core.result import Result
 
 
@@ -39,8 +40,8 @@ def update_context(ctx: Context, task_name: str, result: Result) -> Context:
     ctx.results[task_name] = result
 
     if result.ok and result.value is not None:
-        # Merge Pydantic model fields into vars
-        ctx.vars.update(result.value.model_dump())
+        # Merge Pydantic model fields into vars (merge rule lives Rust-side).
+        ctx.vars = _rust.merge_value_fields(dict(ctx.vars), result.value.model_dump())
 
     return ctx
 

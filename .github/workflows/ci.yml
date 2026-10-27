@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [master, rust_core_dev]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt --check
+        run: cargo fmt -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build llmalib._rust + install dev deps
+        run: uv sync --extra dev
+      - name: ruff
+        run: |
+          uv run ruff check llmalib/
+          uv run ruff format --check llmalib/
+      - name: mypy
+        run: uv run mypy llmalib/
+      - name: pytest
+        run: uv run pytest tests/ -q -o addopts=""

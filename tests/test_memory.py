@@ -3,34 +3,33 @@ tests/memory/test_memory.py
 Tests for context_window, store, and examples modules.
 """
 
-import json
 import os
-import time
 import tempfile
+import time
+
 import pytest
 from pydantic import BaseModel
 
+from llmalib.core.context import make_context
+from llmalib.core.task import Example, Task
 from llmalib.memory.context_window import (
-    count_tokens,
-    trim_to_budget,
     BudgetExceededError,
     _keep_first_and_last_sentence,
+    count_tokens,
+    trim_to_budget,
+)
+from llmalib.memory.examples import (
+    FormattedExample,
+    format_examples_block,
+    select_examples,
 )
 from llmalib.memory.store import (
-    make_memory_store,
-    make_file_store,
     StoreEntry,
     _bm25_rank,
     _tokenize,
+    make_file_store,
+    make_memory_store,
 )
-from llmalib.memory.examples import (
-    select_examples,
-    format_examples_block,
-    FormattedExample,
-)
-from llmalib.core.task import Task, Example
-from llmalib.core.context import make_context
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -43,12 +42,12 @@ class SentimentResult(BaseModel):
 
 
 def make_task(**overrides) -> Task:
-    defaults = dict(
-        name="test",
-        prompt_template="Classify: {{ text }}",
-        output_schema=SentimentResult,
-        token_budget=512,
-    )
+    defaults = {
+        "name": "test",
+        "prompt_template": "Classify: {{ text }}",
+        "output_schema": SentimentResult,
+        "token_budget": 512,
+    }
     defaults.update(overrides)
     return Task(**defaults)
 

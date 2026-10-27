@@ -1,15 +1,18 @@
 """
 core/client.py
 
-Thin HTTP wrapper around any OpenAI-compatible chat completion endpoint.
+Thin adapter over `llmalib._rust.call` (reqwest HTTP transport).
 Accepts a message list, returns a raw response string.
 All retry/reflection logic lives in reliability/retry.py — not here.
 """
 
 from __future__ import annotations
 
-import httpx
+import re
 from dataclasses import dataclass
+from typing import Any
+
+from llmalib import _rust
 
 
 class ClientError(Exception):
@@ -29,7 +32,7 @@ class ClientConfig:
     max_tokens: int = 1024
 
 
-def call(messages: list[dict], config: ClientConfig) -> str:
+def call(messages: list[dict[str, Any]], config: ClientConfig) -> str:
     """
     POST to /v1/chat/completions and return the content string of the first choice.
 
@@ -39,46 +42,25 @@ def call(messages: list[dict], config: ClientConfig) -> str:
     - Missing or empty response content
     - Unexpected response shape
     """
-    url = config.base_url.rstrip("/") + "/chat/completions"
-    payload = {
+    config_dict = {
+        "base_url": config.base_url,
         "model": config.model,
-        "messages": messages,
         "temperature": config.temperature,
+        "timeout": config.timeout,
         "max_tokens": config.max_tokens,
-        "stream": False,
     }
-
     try:
-        response = httpx.post(url, json=payload, timeout=config.timeout)
-    except httpx.TimeoutException:
-        raise ClientError(
-            f"Request timed out after {config.timeout}s "
-            f"(model={config.model}, url={url})"
-        )
-    except httpx.RequestError as exc:
-        raise ClientError(f"Network error: {exc} (url={url})")
-
-    if response.status_code != 200:
-        raise ClientError(
-            f"HTTP {response.status_code} from {url}: {response.text[:200]}",
-            status_code=response.status_code,
-        )
-
-    try:
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, ValueError) as exc:
-        raise ClientError(
-            f"Unexpected response shape from {url}: {exc}. Body: {response.text[:200]}"
-        )
-
-    if not content or not content.strip():
-        raise ClientError(f"Model returned empty content (model={config.model})")
-
-    return content.strip()
+        return _rust.call(messages, config_dict)
+    except _rust.ClientError as exc:
+        message = str(exc)
+        match = re.search(r"\[status (\d+)\]\s*$", message)
+        if match:
+            message = message[: match.start()].rstrip()
+            raise ClientError(message, status_code=int(match.group(1))) from None
+        raise ClientError(message) from None
 
 
-def config_from_task(task) -> ClientConfig:
+def config_from_task(task: Any) -> ClientConfig:
     """Build a ClientConfig from a Task's fields."""
     return ClientConfig(
         base_url=task.base_url,

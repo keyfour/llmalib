@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "crates/llmalib-core",
+    "crates/llmalib-memory",
+    "crates/llmalib-reliability",
+    "crates/llmalib-debug",
+    "crates/llmalib-pipeline",
+    "crates/llmalib-py",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"

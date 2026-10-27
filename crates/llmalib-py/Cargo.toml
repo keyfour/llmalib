@@ -1,0 +1,18 @@
+[package]
+name = "llmalib-py"
+description = "pyo3 bindings exposing the Rust crates as the llmalib._rust extension module"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "_rust"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+llmalib-core = { path = "../llmalib-core" }
+llmalib-memory = { path = "../llmalib-memory" }
+llmalib-reliability = { path = "../llmalib-reliability" }
+llmalib-debug = { path = "../llmalib-debug" }
+llmalib-pipeline = { path = "../llmalib-pipeline" }
+pyo3 = { version = "0.23", features = ["macros", "abi3-py39"] }
+serde_json = "1"
