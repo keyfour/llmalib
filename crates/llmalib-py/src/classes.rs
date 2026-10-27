@@ -79,6 +79,12 @@ impl PyStore {
     pub fn inner_mut(&mut self) -> &mut dyn Store {
         &mut *self.inner
     }
+
+    /// Swap the backend out (e.g. for an engine run that releases the GIL),
+    /// returning the original.
+    pub fn replace_inner(&mut self, replacement: Box<dyn Store>) -> Box<dyn Store> {
+        std::mem::replace(&mut self.inner, replacement)
+    }
 }
 
 fn entry_to_py(py: Python<'_>, entry: &StoreEntry) -> PyResult<PyObject> {

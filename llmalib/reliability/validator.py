@@ -2,16 +2,20 @@
 reliability/validator.py
 
 Extract JSON from raw model output and validate against a Pydantic schema.
-Three-strategy extraction handles models that wrap JSON in prose or fences.
+Thin adapter over `llmalib._rust` (extraction strategies and JSON-Schema
+validation run in Rust); the parsed value is re-hydrated into the pydantic
+model class so callers keep working with typed instances.
 Never raises — all outcomes are returned as ParseResult.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
-from pydantic import BaseModel, ValidationError
+
+from pydantic import BaseModel
+
+from llmalib import _rust
+from llmalib._bridge import hydrate_value, schema_to_json
 
 
 @dataclass(frozen=True)
@@ -32,77 +36,17 @@ def parse_response(raw: str, schema: type[BaseModel]) -> ParseResult:
 
     Returns ParseResult — never raises.
     """
-    json_str = _extract_json(raw)
-    if json_str is None:
-        return ParseResult(
-            ok=False,
-            value=None,
-            error=(
-                f"Could not find valid JSON in response. "
-                f"Response started with: {raw[:120]!r}"
-            ),
-        )
-
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as exc:
-        return ParseResult(
-            ok=False,
-            value=None,
-            error=f"JSON parse error: {exc}. Extracted: {json_str[:120]!r}",
-        )
-
-    try:
-        instance = schema.model_validate(data)
-        return ParseResult(ok=True, value=instance, error=None)
-    except ValidationError as exc:
-        # Produce a concise, actionable error message for the reflection loop
-        errors = exc.errors()
-        messages = []
-        for e in errors:
-            loc = ".".join(str(p) for p in e["loc"]) if e["loc"] else "root"
-            messages.append(f"  - Field '{loc}': {e['msg']}")
-        present_keys = list(data.keys()) if isinstance(data, dict) else "non-object"
-        error_str = (
-            f"Schema validation failed. "
-            f"Got keys: {present_keys}. Errors:\n" + "\n".join(messages)
-        )
-        return ParseResult(ok=False, value=None, error=error_str)
+    out = _rust.parse_response(raw, schema_to_json(schema))
+    if not out["ok"]:
+        return ParseResult(ok=False, value=None, error=out["error"])
+    return ParseResult(
+        ok=True, value=hydrate_value(out["value"], schema), error=None
+    )
 
 
 def _extract_json(raw: str) -> str | None:
     """Try three strategies to find a JSON string in raw model output."""
-    raw = raw.strip()
-
-    # Strategy 1: direct parse
-    try:
-        json.loads(raw)
-        return raw
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 2: markdown code fence  ```json ... ```  or  ``` ... ```
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
-    if fence_match:
-        candidate = fence_match.group(1).strip()
-        try:
-            json.loads(candidate)
-            return candidate
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 3: first {...} or [...] block (greedy from outermost brace)
-    for pattern in (r"\{[\s\S]*\}", r"\[[\s\S]*\]"):
-        match = re.search(pattern, raw)
-        if match:
-            candidate = match.group(0)
-            try:
-                json.loads(candidate)
-                return candidate
-            except json.JSONDecodeError:
-                pass
-
-    return None
+    return _rust.extract_json(raw)
 
 
 def format_schema_hint(schema: type[BaseModel]) -> str:
@@ -113,7 +57,9 @@ def format_schema_hint(schema: type[BaseModel]) -> str:
     Example output:
       {"label": "<str>", "confidence": "<float>", "reason": "<str>"}
     """
-    hints = {}
+    import json
+
+    hints: dict[str, str] = {}
     for name, field_info in schema.model_fields.items():
         annotation = field_info.annotation
         type_name = getattr(annotation, "__name__", str(annotation))

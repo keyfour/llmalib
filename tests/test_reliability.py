@@ -3,16 +3,15 @@ tests/reliability/test_reliability.py
 Tests for validator, guards, and retry modules.
 """
 
-import pytest
 import json
-from unittest.mock import patch, MagicMock
+
+import pytest
 from pydantic import BaseModel
 
-from llmalib.reliability.validator import (
-    parse_response,
-    format_schema_hint,
-    _extract_json,
-)
+from llmalib._testing import raising_caller, sequence_caller, set_caller
+from llmalib.core.client import ClientConfig, ClientError
+from llmalib.core.context import make_context
+from llmalib.core.task import Task
 from llmalib.reliability.guards import (
     field_in_set,
     float_in_range,
@@ -20,10 +19,11 @@ from llmalib.reliability.guards import (
     no_content_from_outside_context,
 )
 from llmalib.reliability.retry import build_reflection_message, run_with_retry
-from llmalib.core.client import ClientConfig, ClientError
-from llmalib.core.task import Task
-from llmalib.core.context import make_context
-
+from llmalib.reliability.validator import (
+    _extract_json,
+    format_schema_hint,
+    parse_response,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -37,12 +37,12 @@ class AnalysisResult(BaseModel):
 
 
 def make_task(**overrides) -> Task:
-    defaults = dict(
-        name="test",
-        prompt_template="Analyse: {{ text }}",
-        output_schema=AnalysisResult,
-        max_retries=3,
-    )
+    defaults = {
+        "name": "test",
+        "prompt_template": "Analyse: {{ text }}",
+        "output_schema": AnalysisResult,
+        "max_retries": 3,
+    }
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -141,7 +141,7 @@ class LabelledResult(BaseModel):
 
 
 def make_value(**kwargs) -> LabelledResult:
-    defaults = dict(label="positive", score=0.8, text="Good product overall.")
+    defaults = {"label": "positive", "score": 0.8, "text": "Good product overall."}
     defaults.update(kwargs)
     return LabelledResult(**defaults)
 
@@ -198,8 +198,9 @@ class TestMaxLength:
 
     def test_passes_none_field(self):
         # max_length guard should skip None values — test via a model that allows None
-        from pydantic import BaseModel as BM
         from typing import Optional
+
+        from pydantic import BaseModel as BM
 
         class NullableResult(BM):
             label: str = "x"
@@ -266,8 +267,8 @@ class TestRunWithRetry:
         messages = [{"role": "user", "content": "test"}]
         config = self._make_config()
 
-        with patch("llmalib.reliability.retry.call", return_value=VALID_JSON):
-            result = run_with_retry(task, messages, config)
+        set_caller(sequence_caller(VALID_JSON))
+        result = run_with_retry(task, messages, config)
 
         assert result.ok is True
         assert result.attempts == 1
@@ -281,8 +282,8 @@ class TestRunWithRetry:
         bad = '{"label": "positive"}'  # missing fields → parse fails
         responses = [bad, VALID_JSON]
 
-        with patch("llmalib.reliability.retry.call", side_effect=responses):
-            result = run_with_retry(task, messages, config)
+        set_caller(sequence_caller(*responses))
+        result = run_with_retry(task, messages, config)
 
         assert result.ok is True
         assert result.attempts == 2
@@ -292,8 +293,8 @@ class TestRunWithRetry:
         messages = [{"role": "user", "content": "test"}]
         config = self._make_config()
 
-        with patch("llmalib.reliability.retry.call", return_value="not json at all"):
-            result = run_with_retry(task, messages, config)
+        set_caller(sequence_caller("not json at all"))
+        result = run_with_retry(task, messages, config)
 
         assert result.ok is False
         assert result.attempts == 2
@@ -307,8 +308,8 @@ class TestRunWithRetry:
         bad = "not json"
         responses = [bad, bad, VALID_JSON]
 
-        with patch("llmalib.reliability.retry.call", side_effect=responses):
-            result = run_with_retry(task, messages, config)
+        set_caller(sequence_caller(*responses))
+        result = run_with_retry(task, messages, config)
 
         assert len(result.trace) == 3
         assert result.trace[0].parse_error is not None
@@ -326,8 +327,8 @@ class TestRunWithRetry:
         )
         responses = [VALID_JSON, VALID_JSON, negative_json]
 
-        with patch("llmalib.reliability.retry.call", side_effect=responses):
-            result = run_with_retry(task, messages, config)
+        set_caller(sequence_caller(*responses))
+        result = run_with_retry(task, messages, config)
 
         assert result.ok is True
         assert result.value.label == "negative"
@@ -338,8 +339,6 @@ class TestRunWithRetry:
         messages = [{"role": "user", "content": "test"}]
         config = self._make_config()
 
-        with patch(
-            "llmalib.reliability.retry.call", side_effect=ClientError("network down")
-        ):
-            with pytest.raises(ClientError, match="network down"):
-                run_with_retry(task, messages, config)
+        set_caller(raising_caller(ClientError("network down")))
+        with pytest.raises(ClientError, match="network down"):
+            run_with_retry(task, messages, config)

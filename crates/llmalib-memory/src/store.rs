@@ -73,7 +73,7 @@ impl StoreEntry {
 }
 
 /// Trait for memory store implementations (Python's `Store` Protocol).
-pub trait Store {
+pub trait Store: Send {
     /// Set a value in the store
     fn set(
         &mut self,

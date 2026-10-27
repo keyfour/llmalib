@@ -27,7 +27,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::Value;
 
-use crate::bridges::{py_router, set_global_caller, with_resolved_caller};
+use crate::bridges::{py_router, resolve_caller, set_global_caller};
 use crate::classes::{
     load_trace, make_file_store, make_memory_store, make_tracer, PyStore, PyTracer,
 };
@@ -35,6 +35,7 @@ use crate::convert::{
     config_from_py, context_from_py, py_to_value, result_to_py, spec_to_task, task_to_spec,
     value_to_py,
 };
+use llmalib_memory::store::Store;
 
 // ---------------------------------------------------------------------------
 // validator
@@ -74,14 +75,21 @@ pub fn format_schema_hint(py: Python<'_>, schema: &Bound<'_, PyAny>) -> PyResult
     Ok(rust_format_schema_hint(&py_to_value(py, schema)?))
 }
 
-/// Python `build_reflection_message(parse_error, guard_errors)` → str.
+/// Python `build_reflection_message(parse_error, guard_errors)` →
+/// `{"role": "user", "content": …}` dict.
 #[pyfunction]
 #[pyo3(signature = (parse_error=None, guard_errors=None))]
-pub fn build_reflection_message(
+pub fn build_reflection_message<'py>(
+    py: Python<'py>,
     parse_error: Option<String>,
     guard_errors: Option<Vec<String>>,
-) -> String {
-    rust_build_reflection_message(parse_error.as_deref(), &guard_errors.unwrap_or_default())
+) -> PyResult<PyObject> {
+    let content =
+        rust_build_reflection_message(parse_error.as_deref(), &guard_errors.unwrap_or_default());
+    let d = pyo3::types::PyDict::new(py);
+    d.set_item("role", "user")?;
+    d.set_item("content", content)?;
+    Ok(d.into_any().unbind())
 }
 
 // ---------------------------------------------------------------------------
@@ -256,7 +264,11 @@ pub fn call(
         .map_err(|_| PyTypeError::new_err("config must be a dict"))?;
     let cfg = config_from_py(d)?;
     let msgs_vec = msgs.as_array().cloned().unwrap_or_default();
-    http_call(msgs_vec, &cfg).map_err(|e| crate::ClientError::new_err(client_error_message(&e)))
+    // Release the GIL for the (potentially slow) HTTP round-trip. Without
+    // this, reqwest's background I/O thread never progresses under the
+    // interpreter (request connects but is never written).
+    let out = py.allow_threads(|| http_call(msgs_vec, &cfg));
+    out.map_err(|e| crate::ClientError::new_err(client_error_message(&e)))
 }
 
 pub fn client_error_message(e: &CoreClientError) -> String {
@@ -292,12 +304,12 @@ pub fn run_with_retry(
         .map_err(|_| PyTypeError::new_err("config must be a dict"))?;
     let cfg = config_from_py(d)?;
     let ctx = context_from_py(py, ctx)?;
+    let caller = resolve_caller(py, caller);
 
-    with_resolved_caller(py, caller, |c| {
-        let result: TaskResult = run_with_retry_with(&task, msgs, &cfg, &ctx, c)
-            .map_err(|e| crate::ClientError::new_err(client_error_message(&e)))?;
-        result_to_py(py, &result)
-    })
+    let result: TaskResult = py
+        .allow_threads(|| run_with_retry_with(&task, msgs, &cfg, &ctx, caller.as_ref()))
+        .map_err(|e| crate::ClientError::new_err(client_error_message(&e)))?;
+    result_to_py(py, &result)
 }
 
 // ---------------------------------------------------------------------------
@@ -338,21 +350,46 @@ pub fn run_pipeline(
     }
 
     let router_fn = router.map(|f| py_router(py, f));
+    let caller = resolve_caller(py, caller);
 
-    let results = with_resolved_caller(py, caller, |c| {
-        let mut store_ref = store.as_ref().map(|s| s.borrow_mut(py));
-        let mut tracer_ref = tracer.as_ref().map(|t| t.borrow_mut(py));
-        run_pipeline_with(
-            tasks,
-            &mut ctx,
-            router_fn,
-            store_ref.as_mut().map(|s| s.inner_mut()),
-            tracer_ref.as_mut().map(|t| &mut t.inner),
-            c,
-            debug,
-        )
-        .map_err(map_pipeline_error)
-    })?;
+    // Tracer: the Rust tracer is cloned for the engine run and copied back
+    // afterwards (Tracer is a plain append-record value).
+    let mut engine_tracer = tracer.as_ref().map(|t| t.borrow(py).inner.clone());
+
+    // Store: the backend is extracted from the pyclass so it can be used
+    // while the GIL is released; a Drop guard restores it even on panic.
+    // Everything engine-visible is moved into the closure; nothing GIL-bound
+    // (Python tokens, borrows) crosses it — bridges re-acquire the GIL
+    // themselves when they call back into Python.
+    let results = {
+        let mut store_guard = store.map(|s| StoreLease::take(py, s));
+        py.allow_threads(move || {
+            let store_ref: Option<&mut dyn Store> = match &mut store_guard {
+                Some(lease) => match lease.backend.as_mut() {
+                    Some(b) => Some(&mut **b),
+                    None => None,
+                },
+                None => None,
+            };
+            let tracer_ref = engine_tracer.as_mut();
+            run_pipeline_with(
+                tasks,
+                &mut ctx,
+                router_fn,
+                store_ref,
+                tracer_ref,
+                caller.as_ref(),
+                debug,
+            )
+            .map(|results| (results, ctx, engine_tracer))
+            .map_err(map_pipeline_error)
+        })?
+    };
+
+    let (results, ctx, engine_tracer) = results;
+    if let (Some(t), Some(inner)) = (tracer, engine_tracer) {
+        t.borrow_mut(py).inner = inner;
+    }
 
     let d = PyDict::new(py);
     d.set_item("run_id", ctx.run_id.clone())?;
@@ -373,6 +410,71 @@ fn map_pipeline_error(e: PipelineError) -> PyErr {
     match e {
         PipelineError::Client(c) => crate::ClientError::new_err(client_error_message(&c)),
         PipelineError::Budget(b) => crate::BudgetExceededError::new_err(b.to_string()),
+    }
+}
+
+/// Extracts the backend `Box<dyn Store>` out of a `PyStore` pyclass for the
+/// duration of a `py.allow_threads` engine run, and restores it afterwards —
+/// including on panic (bridges panic when Python exceptions propagate).
+struct StoreLease {
+    pyclass: Py<PyStore>,
+    backend: Option<Box<dyn Store>>,
+}
+
+impl StoreLease {
+    fn take(py: Python<'_>, store: Py<PyStore>) -> Self {
+        let backend = {
+            let mut borrowed = store.bind(py).borrow_mut();
+            borrowed.replace_inner(Box::new(TakenStore))
+        };
+        Self {
+            pyclass: store,
+            backend: Some(backend),
+        }
+    }
+}
+
+impl Drop for StoreLease {
+    fn drop(&mut self) {
+        if let Some(backend) = self.backend.take() {
+            Python::with_gil(|py| {
+                let mut borrowed = self.pyclass.bind(py).borrow_mut();
+                borrowed.replace_inner(backend);
+            });
+        }
+    }
+}
+
+/// Placeholder left in place of the extracted backend while the engine runs.
+/// Python-side access during a released-GIL engine call is a programming
+/// error (the caller's thread holds no GIL), so fail loudly.
+struct TakenStore;
+
+impl Store for TakenStore {
+    fn set(
+        &mut self,
+        _key: String,
+        _value: serde_json::Value,
+        _score: f64,
+        _ttl: Option<std::time::Duration>,
+    ) {
+        panic!("llmalib store backend is in use by an engine run");
+    }
+    fn get(&self, _key: &str) -> Option<llmalib_memory::store::StoreEntry> {
+        panic!("llmalib store backend is in use by an engine run");
+    }
+    fn delete(&mut self, _key: &str) {
+        panic!("llmalib store backend is in use by an engine run");
+    }
+    fn list(&mut self, _prefix: &str) -> Vec<String> {
+        panic!("llmalib store backend is in use by an engine run");
+    }
+    fn get_relevant(
+        &mut self,
+        _query: &str,
+        _top_k: usize,
+    ) -> Vec<llmalib_memory::store::StoreEntry> {
+        panic!("llmalib store backend is in use by an engine run");
     }
 }
 
@@ -403,15 +505,16 @@ pub fn decompose(
         reg.push((name, spec_to_task(py, &spec)?));
     }
 
-    with_resolved_caller(py, caller, |c| {
-        let tasks =
-            decompose_with(&prompt, &reg, &cfg, max_tasks, c).map_err(map_decomposition_error)?;
-        let specs: Vec<PyObject> = tasks
-            .iter()
-            .map(|t| task_to_spec(py, t))
-            .collect::<PyResult<_>>()?;
-        Ok(pyo3::types::PyList::new(py, specs)?.into_any().unbind())
-    })
+    let caller = resolve_caller(py, caller);
+
+    let tasks = py
+        .allow_threads(|| decompose_with(&prompt, &reg, &cfg, max_tasks, caller.as_ref()))
+        .map_err(map_decomposition_error)?;
+    let specs: Vec<PyObject> = tasks
+        .iter()
+        .map(|t| task_to_spec(py, t))
+        .collect::<PyResult<_>>()?;
+    Ok(pyo3::types::PyList::new(py, specs)?.into_any().unbind())
 }
 
 fn map_decomposition_error(e: DecompositionError) -> PyErr {
@@ -449,22 +552,28 @@ pub fn replay_task(
         Some(s) => Some(py_to_value(py, s)?),
         None => None,
     };
-    with_resolved_caller(py, caller, |c| {
-        let result = replay_task_with(
-            &tracer.inner,
-            &task_name,
-            &task,
-            attempt_number,
-            model.as_deref(),
-            base_url.as_deref(),
-            prompt_override.as_deref(),
-            schema,
-            diff,
-            c,
-        )
+    let caller = resolve_caller(py, caller);
+    // replay only reads the recorded attempts — an owned clone crosses the
+    // GIL release safely.
+    let engine_tracer = tracer.inner.clone();
+
+    let result = py
+        .allow_threads(|| {
+            replay_task_with(
+                &engine_tracer,
+                &task_name,
+                &task,
+                attempt_number,
+                model.as_deref(),
+                base_url.as_deref(),
+                prompt_override.as_deref(),
+                schema,
+                diff,
+                caller.as_ref(),
+            )
+        })
         .map_err(|e| PyRuntimeError::new_err(replay_error_message(&e)))?;
-        result_to_py(py, &result)
-    })
+    result_to_py(py, &result)
 }
 
 fn replay_error_message(e: &ReplayError) -> String {

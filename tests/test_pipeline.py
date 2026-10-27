@@ -6,23 +6,22 @@ Tests for pipeline runner, router, decomposer, tracer, and inspector.
 import json
 import os
 import tempfile
+
 import pytest
-from unittest.mock import patch, MagicMock
 from pydantic import BaseModel
 
+from llmalib._testing import sequence_caller, set_caller
+from llmalib.core.client import ClientConfig
 from llmalib.core.context import make_context
 from llmalib.core.task import Task
-from llmalib.core.client import ClientConfig
+from llmalib.debug.tracer import load_trace, make_tracer
+from llmalib.pipeline.decomposer import DecompositionError, decompose
 from llmalib.pipeline.pipeline import run_pipeline
 from llmalib.pipeline.router import (
-    stop_on_failure,
     branch_on_field,
     compose_routers,
+    stop_on_failure,
 )
-from llmalib.pipeline.decomposer import decompose, DecompositionError
-from llmalib.debug.tracer import Tracer, make_tracer, load_trace
-from llmalib.debug.inspector import print_result, print_trace
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -39,12 +38,12 @@ class SummaryResult(BaseModel):
 
 
 def make_task(name: str = "task", schema=ClassifyResult, **overrides) -> Task:
-    defaults = dict(
-        name=name,
-        prompt_template="Process: {{ text }}",
-        output_schema=schema,
-        max_retries=1,
-    )
+    defaults = {
+        "name": name,
+        "prompt_template": "Process: {{ text }}",
+        "output_schema": schema,
+        "max_retries": 1,
+    }
     defaults.update(overrides)
     return Task(**defaults)
 
@@ -64,8 +63,8 @@ class TestRunPipeline:
     def test_single_task_success(self):
         task = make_task()
         ctx = make_context(text="hello")
-        with patch("llmalib.reliability.retry.call", return_value=CLASSIFY_JSON):
-            results = run_pipeline([task], ctx)
+        set_caller(sequence_caller(CLASSIFY_JSON))
+        results = run_pipeline([task], ctx)
         assert len(results) == 1
         assert results[0].ok is True
         assert results[0].value.label == "positive"
@@ -77,8 +76,8 @@ class TestRunPipeline:
         )
         ctx = make_context(text="hello")
         responses = [CLASSIFY_JSON, SUMMARY_JSON]
-        with patch("llmalib.reliability.retry.call", side_effect=responses):
-            results = run_pipeline([task1, task2], ctx)
+        set_caller(sequence_caller(*responses))
+        results = run_pipeline([task1, task2], ctx)
         assert len(results) == 2
         assert results[0].ok is True
         assert results[1].ok is True
@@ -93,25 +92,24 @@ class TestRunPipeline:
         )
         ctx = make_context(text="hello")
         responses = [CLASSIFY_JSON, SUMMARY_JSON]
-        with patch(
-            "llmalib.reliability.retry.call", side_effect=responses
-        ) as mock_call:
-            results = run_pipeline([task1, task2], ctx)
+        set_caller(sequence_caller(*responses))
+        results = run_pipeline([task1, task2], ctx)
         assert results[1].ok is True
+        assert ctx.vars["label"] == "positive"
 
     def test_failed_task_still_returns_result(self):
         task = make_task(max_retries=1)
         ctx = make_context(text="hello")
-        with patch("llmalib.reliability.retry.call", return_value="not json"):
-            results = run_pipeline([task], ctx)
+        set_caller(sequence_caller("not json"))
+        results = run_pipeline([task], ctx)
         assert len(results) == 1
         assert results[0].ok is False
 
     def test_debug_mode_does_not_raise(self, capsys):
         task = make_task()
         ctx = make_context(text="hello")
-        with patch("llmalib.reliability.retry.call", return_value=CLASSIFY_JSON):
-            results = run_pipeline([task], ctx, debug=True)
+        set_caller(sequence_caller(CLASSIFY_JSON))
+        results = run_pipeline([task], ctx, debug=True)
         assert results[0].ok is True
 
     def test_template_error_returns_error_result(self):
@@ -125,8 +123,8 @@ class TestRunPipeline:
         task = make_task()
         ctx = make_context(text="hello")
         tracer = make_tracer(ctx.run_id)
-        with patch("llmalib.reliability.retry.call", return_value=CLASSIFY_JSON):
-            run_pipeline([task], ctx, tracer=tracer)
+        set_caller(sequence_caller(CLASSIFY_JSON))
+        run_pipeline([task], ctx, tracer=tracer)
         assert len(tracer.task_traces) == 1
         assert tracer.task_traces[0].ok is True
 
@@ -139,8 +137,9 @@ class TestRunPipeline:
 class TestStopOnFailure:
     def test_continues_on_success(self):
         router = stop_on_failure()
-        from llmalib.core.result import make_ok_result
         from pydantic import BaseModel
+
+        from llmalib.core.result import make_ok_result
 
         class M(BaseModel):
             x: int = 1
@@ -231,8 +230,8 @@ class TestDecompose:
             }
         )
         config = ClientConfig()
-        with patch("llmalib.pipeline.decomposer.call", return_value=plan_json):
-            tasks = decompose("Analyse this text", task_registry, config)
+        set_caller(sequence_caller(plan_json))
+        tasks = decompose("Analyse this text", task_registry, config)
         assert len(tasks) == 2
         assert tasks[0].name == "classify"
         assert tasks[1].name == "summarise"
@@ -246,15 +245,15 @@ class TestDecompose:
             }
         )
         config = ClientConfig()
-        with patch("llmalib.pipeline.decomposer.call", return_value=bad_plan):
-            with pytest.raises(DecompositionError, match="nonexistent"):
-                decompose("Do something", task_registry, config)
+        set_caller(sequence_caller(bad_plan))
+        with pytest.raises(DecompositionError, match="nonexistent"):
+            decompose("Do something", task_registry, config)
 
     def test_invalid_json_triggers_retry_then_fails(self):
         config = ClientConfig()
-        with patch("llmalib.pipeline.decomposer.call", return_value="not json"):
-            with pytest.raises(DecompositionError):
-                decompose("Do something", {"t": make_task()}, config)
+        set_caller(sequence_caller("not json"))
+        with pytest.raises(DecompositionError):
+            decompose("Do something", {"t": make_task()}, config)
 
     def test_empty_registry_raises(self):
         config = ClientConfig()
@@ -272,8 +271,8 @@ class TestDecompose:
             }
         )
         config = ClientConfig()
-        with patch("llmalib.pipeline.decomposer.call", return_value=plan_json):
-            tasks = decompose("Classify this", task_registry, config)
+        set_caller(sequence_caller(plan_json))
+        tasks = decompose("Classify this", task_registry, config)
         assert tasks[0].max_retries == 5
 
 
@@ -284,8 +283,9 @@ class TestDecompose:
 
 class TestTracer:
     def _make_result(self, task_name: str, ok: bool):
-        from llmalib.core.result import make_ok_result, make_error_result, make_attempt
         import time
+
+        from llmalib.core.result import make_attempt, make_error_result, make_ok_result
 
         attempt = make_attempt(1, "prompt", "response", None, [], time.monotonic())
         if ok:

@@ -25,6 +25,7 @@ pub struct TaskTrace {
 /// Always-on recorder for every task result in a pipeline run.
 ///
 /// Overhead is negligible (string copies). The debugging value is not.
+#[derive(Clone)]
 pub struct Tracer {
     pub run_id: String,
     pub task_traces: Vec<TaskTrace>,

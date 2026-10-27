@@ -161,13 +161,11 @@ pub fn set_global_caller(f: Option<Py<PyAny>>) {
 }
 
 /// Caller resolution order: explicit parameter → global seam → real HTTP.
-pub fn with_resolved_caller<T>(
-    py: Python<'_>,
-    param: Option<Py<PyAny>>,
-    f: impl FnOnce(&dyn Caller) -> PyResult<T>,
-) -> PyResult<T> {
+/// The returned `Arc` can cross `py.allow_threads` (bridges re-acquire the
+/// GIL internally when they call back into Python).
+pub fn resolve_caller(py: Python<'_>, param: Option<Py<PyAny>>) -> Arc<dyn Caller> {
     if let Some(p) = param {
-        return f(&PyCaller { f: p });
+        return Arc::new(PyCaller { f: p });
     }
     let global = GLOBAL_CALLER
         .read()
@@ -175,7 +173,7 @@ pub fn with_resolved_caller<T>(
         .as_ref()
         .map(|g| g.clone_ref(py));
     if let Some(g) = global {
-        return f(&PyCaller { f: g });
+        return Arc::new(PyCaller { f: g });
     }
-    f(&HttpCaller)
+    Arc::new(HttpCaller)
 }
