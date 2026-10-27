@@ -77,7 +77,8 @@ expect back**, and **how to handle failures**.
 ### Requirements
 
 - Be a `@dataclass(frozen=True)` — tasks are immutable declarations, not runtime objects.
-- Require `name`, `prompt_template` (Jinja2 string), and `output_schema` (a Pydantic `BaseModel` subclass).
+- Require `name`, `prompt_template` (Jinja2-syntax string — rendered rust-side
+  via minijinja), and `output_schema` (a Pydantic `BaseModel` subclass).
 - Have sensible defaults for all operational parameters so a task can be created with three fields.
 - Support per-task model override so different tasks in a pipeline can use different models.
 - Support an optional list of `Guard` instances for post-generation checks.
@@ -90,7 +91,8 @@ expect back**, and **how to handle failures**.
 class Task:
     # Required
     name: str
-    prompt_template: str           # Jinja2 template; vars filled from Context
+    prompt_template: str           # Jinja2-syntax template (rendered via minijinja);
+                                   # vars filled from Context
     output_schema: type[BaseModel] # Defines expected response shape
 
     # Model config (optional overrides)
@@ -117,10 +119,11 @@ class Task:
 Tasks are defined once and reused across runs. Mutating a task during a pipeline run would
 be a source of subtle bugs. Immutability forces all state into `Context`.
 
-**Why Jinja2 templates?**
-Templates are readable, debuggable, and familiar. The rendered prompt is always inspectable
-in the `Trace` before it is sent to the model. String formatting (`f""`) would not provide
-this separation.
+**Why Jinja2-compatible templates?**
+Templates are readable, debuggable, and familiar. They are rendered rust-side
+by `minijinja` (Jinja2-compatible) inside the engine. The rendered prompt is
+always inspectable in the `Trace` before it is sent to the model. String
+formatting (`f""`) would not provide this separation.
 
 **Token budget**
 Research on context degradation (arxiv:2509.21361; arxiv:2508.21433) shows that performance

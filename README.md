@@ -1,6 +1,6 @@
 # llmalib
 
-**A minimal, transparent Python library for building agentic pipelines with local small language models.**
+**A minimal, transparent library for building agentic pipelines with local small language models — a Python API and types wrapping a Rust engine.**
 
 ---
 
@@ -47,16 +47,32 @@ Tasks are data (`@dataclass`). Operations are functions. Pipelines are lists. Th
 
 ### 6. Minimal dependencies
 
-`pydantic`, `httpx`, `jinja2`, `rich` (optional). That is the entire dependency tree.
+`pydantic`, `rich` (optional). The engine — HTTP client, Jinja2-compatible
+templating, JSON-Schema validation, BM25, tracing — is compiled into the
+`llmalib._rust` extension module from the Rust crates in this repo. No
+`httpx`, no `jinja2`.
 
 ---
 
 ## Architecture Overview
 
+The Python package is a thin wrapper: public API, dataclasses, and pydantic
+types. All engine behavior runs in the Rust crates, exposed through the
+`llmalib._rust` pyo3 extension module. See
+[docs/MIGRATION.md](docs/MIGRATION.md) for the full boundary contract.
+
 ```
-llmalib/
+crates/                     # Rust workspace — the engine
+├── llmalib-core/           # Task, Result, Context, HTTP Caller, Guard trait
+├── llmalib-memory/         # Token budget, KV store (BM25 + TTL), few-shot selection
+├── llmalib-reliability/    # JSON-Schema validation, reflection retry, guard rules
+├── llmalib-debug/          # Tracer, replay engine
+├── llmalib-pipeline/       # run_pipeline, routers, decomposer
+└── llmalib-py/             # pyo3 bindings → llmalib._rust
+
+llmalib/                    # Python wrapper package (public API)
 │
-├── core/               # Foundational types and HTTP client
+├── core/               # Foundational types and HTTP client adapter
 │   ├── client.py       # Thin wrapper: render prompt → HTTP → raw string
 │   ├── task.py         # Task dataclass: schema + template + config
 │   ├── result.py       # Result envelope: value | error | trace
@@ -68,9 +84,9 @@ llmalib/
 │   └── router.py       # Route a Result to the next Task
 │
 ├── reliability/        # Correctness and robustness
-│   ├── validator.py    # Pydantic schema validation + custom rules
+│   ├── validator.py    # Schema validation + custom rules
 │   ├── retry.py        # Reflection loop: feed errors back as context
-│   └── guards.py       # Lightweight hallucination heuristics
+│   └── guards.py       # Lightweight hallucination heuristics (Rust-native rules)
 │
 ├── memory/             # Context and example management
 │   ├── context_window.py  # Token budget: trim to fit, never silently overflow
@@ -126,9 +142,19 @@ User prompt (unstructured text)
    Final output + complete Trace
 ```
 
+*Every numbered step executes rust-side inside the `llmalib._rust` engine;
+the Python layer marshals Tasks in and hydrates Results back into pydantic
+instances.*
+
 ---
 
 ## Quick Start
+
+```bash
+# Requires a Rust toolchain (stable) — the llmalib._rust extension is built
+# from source by maturin during install.
+uv pip install llmalib        # or: pip install llmalib
+```
 
 ```python
 from pydantic import BaseModel
@@ -161,12 +187,13 @@ print(results[0].value)
 
 | File | Contents |
 |---|---|
-| [core.md](core.md) | `client`, `task`, `result`, `context` |
-| [pipeline.md](pipeline.md) | `pipeline`, `decomposer`, `router` |
-| [reliability.md](reliability.md) | `validator`, `retry`, `guards` |
-| [memory.md](memory.md) | `context_window`, `store`, `examples` |
-| [debug.md](debug.md) | `tracer`, `inspector`, `replay` |
-| [research.md](research.md) | Arxiv findings that informed design |
+| [MIGRATION.md](docs/MIGRATION.md) | Rust-port architecture, Python↔Rust boundary contract, extensibility |
+| [core.md](docs/core.md) | `client`, `task`, `result`, `context` |
+| [pipeline.md](docs/pipeline.md) | `pipeline`, `decomposer`, `router` |
+| [reliability.md](docs/reliability.md) | `validator`, `retry`, `guards` |
+| [memory.md](docs/memory.md) | `context_window`, `store`, `examples` |
+| [debug.md](docs/debug.md) | `tracer`, `inspector`, `replay` |
+| [research.md](docs/research.md) | Arxiv findings that informed design |
 
 ---
 

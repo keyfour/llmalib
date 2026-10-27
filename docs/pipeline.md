@@ -65,7 +65,8 @@ def run_pipeline(
 ```
 1. context_window.trim(ctx, task)     → trim ctx.vars to fit task.token_budget
 2. examples.select(task, ctx)         → pick up to N few-shot examples
-3. render_prompt(task, ctx, examples) → Jinja2 render → messages list
+3. render_prompt(task, ctx, examples) → minijinja render (Jinja2-compatible,
+   executed rust-side) → messages list
 4. run_with_retry(task, messages, config) → Result
 5. update_context(ctx, task.name, result)
 6. if router: adjust remaining task list
