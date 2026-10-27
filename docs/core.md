@@ -58,8 +58,12 @@ def call(messages: list[dict], config: ClientConfig) -> str:
   structured output tasks. Raise it only for generative / creative tasks.
 - The function accepts a `messages` list (not a single string) so that the retry loop in
   `reliability/retry.py` can append reflection turns without rebuilding from scratch.
-- Connection pooling is handled by `httpx` automatically; do not add manual retry logic here.
-  Retries belong in `reliability/retry.py` at the semantic level, not the network level.
+- Connection pooling and retry-free network handling are provided by the Rust
+  HTTP caller (`reqwest` blocking, in `crates/llmalib-core/src/client.rs`);
+  the Python `llmalib.core.client` module is a thin adapter over
+  `llmalib._rust.call` plus `ClientError` status-recovery. Do not add manual
+  retry logic here. Retries belong in `reliability/retry.py` at the semantic
+  level, not the network level.
 
 ---
 
